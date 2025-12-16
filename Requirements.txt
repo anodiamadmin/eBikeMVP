@@ -1,0 +1,18 @@
+For the following six higher priority Risks we want to develop a MVP software/ mobile app for the Mitigation of the same. 
+1. Asset Theft & Damage: E-bikes are high-value assets; owner trust is critical: KYC (owner & renter), GPS tracking, trip logs, photo check-in/out, security deposits
+2. Insurance & Liability: Accidents can kill platform adoption: Per-ride insurance option, digital waivers, incident reporting flow
+3. Marketplace Cold-Start: Two-sided marketplace adoption risk: Hyper-local UNSW launch, early owner incentives, verified profiles & ratings
+4. Payment Fraud & Chargebacks: Financial leakage threatens unit economics: Stripe escrow, pre-authorised deposits, fraud scoring, booking limits
+5. Battery Abuse & Maintenance: Owner long-term cost concerns: Usage analytics, battery health reporting, misuse flagging
+6. Regulatory Compliance (NSW): Council rules can block scaling: Platform-as-facilitator model, speed compliance, in-app safety prompts
+Give me all the possible user stores for the same in the following format: As a [User], I want [Action], so that [Benefit]
+Also give me the testing/QA "acceptance criteria" for each user story.
+
+
+
+
+
+Booking caps based on user tier
+Limits configurable via admin panel
+Users notified when limits reached
+Limits automatically lifted with trust score improvement
