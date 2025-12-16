@@ -7,12 +7,3 @@ For the following six higher priority Risks we want to develop a MVP software/ m
 6. Regulatory Compliance (NSW): Council rules can block scaling: Platform-as-facilitator model, speed compliance, in-app safety prompts
 Give me all the possible user stores for the same in the following format: As a [User], I want [Action], so that [Benefit]
 Also give me the testing/QA "acceptance criteria" for each user story.
-
-
-
-
-
-Booking caps based on user tier
-Limits configurable via admin panel
-Users notified when limits reached
-Limits automatically lifted with trust score improvement
