@@ -1,0 +1,5066 @@
+app/(auth)/_layout.jsx:
+
+import { Stack } from "expo-router";
+
+export default function AuthLayout() {
+  return (
+    <Stack screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="signin" />
+      <Stack.Screen name="signup" />
+    </Stack>
+  );
+}
+
+
+app/(auth)/signin.jsx:
+
+// taking username from backend here, might change approach later
+
+import { useRouter } from "expo-router";
+import * as SecureStore from 'expo-secure-store';
+import { useContext, useState } from "react";
+import { Alert, StyleSheet, View } from "react-native";
+import ActionRow from "../../components/ActionRow";
+import BrandLogo from "../../components/BrandLogo";
+import Button from "../../components/Button";
+import EmailInput from "../../components/EmailInput";
+import Label from "../../components/Label";
+import PasswordInput from "../../components/PasswordInput";
+import ScreenWrapper from "../../components/ScreenWrapper";
+import { AuthStatus } from "../../constants/types";
+import { AuthContext } from "../../context/AuthContext";
+import { useIntent } from "../../hooks/useIntent";
+import { authService } from "../../services/authService";
+
+export default function SignIn() {
+  const router = useRouter();
+  
+  // ✅ 1. Get 'setUser' from context
+  const { setAuthStatus, setUser } = useContext(AuthContext);
+  
+  const { resolveIntent } = useIntent();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleSignIn = async () => {
+    if (!email || !password) {
+      Alert.alert("Missing Fields", "Please enter both email and password.");
+      return;
+    }
+    setLoading(true);
+    try {
+      // 1. Perform Login
+      const response = await authService.login(email, password);
+      
+      if (response.access_token) {
+        // (Redundant but safe: ensure token is saved before profile fetch)
+        await SecureStore.setItemAsync('user_token', response.access_token);
+        
+        // ✅ 2. Fetch User Profile immediately using the new token
+        try {
+          const userProfile = await authService.getUserProfile();
+          setUser(userProfile); // Update Context State
+        } catch (profileError) {
+          console.error("Profile fetch failed:", profileError);
+          // We don't block login here, but user data might be empty until reload
+        }
+
+        // 3. Update Auth Status & Redirect
+        setAuthStatus(AuthStatus.AUTHENTICATED);
+        resolveIntent();
+      }
+    } catch (error) {
+      const errorMessage = error.response?.data?.detail || "Invalid email or password";
+      Alert.alert("Login Failed", errorMessage);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <ScreenWrapper mode="default" statusBar="dark">
+      <View style={styles.container}>
+        <BrandLogo />
+        <Label variant="heading">Sign in to continue</Label>
+
+        <View style={styles.form}>
+          <EmailInput 
+            value={email} 
+            onChangeText={setEmail} 
+            testID="emailTextInput"
+          />
+          <PasswordInput 
+            value={password} 
+            onChangeText={setPassword} 
+            testID="passwordTextInput"
+          />
+          
+          <Button 
+            title={loading ? "Signing In..." : "Sign In"} 
+            variant="primary" 
+            onPress={handleSignIn} 
+            disabled={loading}
+            style={styles.signInButton}
+            testID="SignInButton"
+          />
+        </View>
+
+        <ActionRow 
+          text="Don’t have an account?"
+          actionText="Sign Up"
+          onActionPress={() => router.push("/(auth)/signup")} 
+        />
+        
+      </View>
+    </ScreenWrapper>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    paddingHorizontal: 24,
+    paddingTop: 20, 
+  },
+  form: {
+    marginBottom: 20,
+  },
+  signInButton: {
+    marginTop: 20
+  }
+});
+
+
+app/(auth)/signup.jsx:
+
+// taking username from backend here, might change approach later
+
+import { useRouter } from "expo-router";
+import * as SecureStore from 'expo-secure-store';
+import { useContext, useState } from "react";
+import { Alert, ScrollView, StyleSheet, View } from "react-native";
+import ActionRow from "../../components/ActionRow";
+import BrandLogo from "../../components/BrandLogo";
+import Button from "../../components/Button";
+import Checkbox from "../../components/Checkbox";
+import DatePicker from "../../components/DatePicker";
+import EmailInput from "../../components/EmailInput";
+import ImageUploader from "../../components/ImageUploader";
+import Label from "../../components/Label";
+import PasswordInput from "../../components/PasswordInput";
+import ScreenWrapper from "../../components/ScreenWrapper";
+import TextField from "../../components/TextField";
+import { AuthStatus } from "../../constants/types";
+import { AuthContext } from "../../context/AuthContext";
+import { useIntent } from "../../hooks/useIntent";
+import { authService } from "../../services/authService";
+import { Colors } from "../../theme/colors";
+import { isAtLeast16, isValidEmail } from "../../utils/validators";
+
+export default function SignUp() {
+  const router = useRouter();
+  
+  // ✅ 1. Destructure 'setUser' from Context
+  const { setAuthStatus, setUser } = useContext(AuthContext);
+  
+  const { resolveIntent } = useIntent(); 
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [dob, setDob] = useState(null);
+  const [agreed, setAgreed] = useState(false);
+  const [profileImage, setProfileImage] = useState(null);
+  const [idImage, setIdImage] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+
+  const handleSignUp = async () => {
+    if (!name || !email || !password || !dob) {
+      Alert.alert("Missing Fields", "Please fill in all text details.");
+      return;
+    }
+    if (!isValidEmail(email)) {
+      Alert.alert("Invalid Email", "Please enter a valid email address.");
+      return;
+    }
+    if (!isAtLeast16(dob)) {
+      Alert.alert("Age Restriction", "You must be at least 16 years old.");
+      return;
+    }
+    if (!profileImage || !idImage) {
+      Alert.alert("Photos Required", "You must take both a Selfie and ID.");
+      return;
+    }
+    if (!agreed) {
+      Alert.alert("Agreement Required", "Please agree to the Terms & Conditions.");
+      return;
+    }
+
+    setLoading(true);
+    setVerifying(true); 
+
+    try {
+      // Simulate ID Verification delay
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      setVerifying(false); 
+
+      Alert.alert(
+        "Identity Verified", 
+        "Facial biometrics match the ID provided.",
+        [{ 
+            text: "Create Account", 
+            onPress: async () => await performRegistration()
+        }]
+      );
+    } catch (error) {
+      setLoading(false);
+      setVerifying(false);
+      console.log("Error:", error);
+    }
+  };
+
+  const performRegistration = async () => {
+    try {
+      const dobString = dob.toISOString().split('T')[0];
+      const response = await authService.register(name, email, password, dobString);
+      
+      if (response.access_token) {
+        await SecureStore.setItemAsync('user_token', response.access_token);
+
+        // ✅ 2. Fetch & Set User Profile Immediately
+        try {
+            const userProfile = await authService.getUserProfile();
+            setUser(userProfile); // Update global state
+        } catch (profileError) {
+            console.error("Profile fetch failed after signup:", profileError);
+        }
+
+        setAuthStatus(AuthStatus.AUTHENTICATED);
+        resolveIntent();
+      }
+    } catch (error) {
+      const msg = error.response?.data?.detail || "Registration failed.";
+      Alert.alert("Error", msg);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const getButtonTitle = () => {
+    if (verifying) return "Verifying Identity...";
+    if (loading) return "Creating Account...";
+    return "Continue";
+  };
+
+  return (
+    <ScreenWrapper mode="scroll" statusBar="dark">
+      <View style={{ paddingHorizontal: 24, paddingTop: 20 }}>
+        <BrandLogo />
+        <Label variant="heading">Create account</Label>
+      </View>
+
+      <ScrollView 
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled" 
+        keyboardDismissMode="on-drag"
+      >
+        <View style={styles.form}>
+          <TextField
+            testID="nameInput"
+            label="Full Name (as displayed on government ID)"
+            value={name}
+            onChangeText={setName}
+            placeholder="Enter Full Name"
+          />
+
+          <DatePicker 
+            testID="dobPicker"
+            label="Date of Birth"
+            value={dob}
+            onChange={setDob}
+            placeholder="Select Your Date of Birth"
+            style={{ marginBottom: 15 }}
+            inputStyle={{ 
+              backgroundColor: Colors.inputBackground,
+              borderColor: Colors.border
+            }}
+          />
+
+          <EmailInput 
+            testID="emailInput"
+            value={email}
+            onChangeText={setEmail}
+            label="Email (for receipts and rides)"
+          />
+
+          <PasswordInput
+            testID="passwordInput"
+            label="Create Password"
+            value={password}
+            onChangeText={setPassword}
+          />
+        </View>
+
+        <View style={styles.uploadSection}>
+          <ImageUploader 
+            testID="idUploader"
+            label="Capture Govt. ID"
+            activeLabel="ID Captured"
+            icon="card-outline"
+            imageUri={idImage}
+            onImageSelected={setIdImage}
+            aspect={[4, 3]}
+          />
+          <ImageUploader 
+            testID="selfieUploader"
+            label="Take Your Selfie"
+            activeLabel="Selfie Taken"
+            icon="camera-outline"
+            imageUri={profileImage}
+            onImageSelected={setProfileImage}
+            aspect={[1, 1]}
+          />
+        </View>
+
+        <View style={styles.termsContainer}>
+          <Checkbox 
+            testID="termsCheckbox"
+            checked={agreed} 
+            onPress={() => setAgreed(!agreed)} 
+          />
+          <ActionRow 
+            text="I accept the"
+            actionText="Terms & Conditions"
+            onActionPress={() => router.push("/terms")}
+            style={{ 
+              justifyContent: 'flex-start', 
+              marginLeft: 10,
+              marginTop: 0 
+            }}
+          />
+        </View>
+
+        <View style={styles.actionSection}>
+          <Button 
+            testID="signUpButton"
+            title={getButtonTitle()} 
+            variant="primary" 
+            onPress={handleSignUp} 
+            disabled={loading}
+          />
+          <ActionRow 
+            text="Already an user?"
+            actionText="Sign in"
+            onActionPress={() => router.back()}
+          />
+        </View>
+      </ScrollView>
+    </ScreenWrapper>
+  );
+}
+
+const styles = StyleSheet.create({
+  content: {
+    flexGrow: 1,
+    paddingHorizontal: 24,
+    paddingBottom: 40,
+  },
+  form: {
+    marginBottom: 10,
+  },
+  uploadSection: {
+    flexDirection: 'row', 
+    gap: 12, 
+    marginBottom: 20, 
+    height: 60, 
+  },
+  termsContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 15,
+    marginTop: 5,
+  },
+  actionSection: {
+    marginTop: 0,
+  },
+});
+
+
+app/(public)/_layout.jsx:
+
+import { Stack } from "expo-router";
+
+export default function PublicLayout() {
+  return (
+    <Stack screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="terms" />
+    </Stack>
+  );
+}
+
+
+app/(public)/terms.jsx:
+
+import { useRouter } from "expo-router";
+import { StyleSheet, View } from "react-native";
+import BrandLogo from "../../components/BrandLogo";
+import Button from "../../components/Button";
+import Label from "../../components/Label";
+import ScreenWrapper from "../../components/ScreenWrapper";
+import { Colors } from "../../theme/colors";
+
+export default function Terms() {
+  const router = useRouter();
+
+  return (
+    <ScreenWrapper mode="default" statusBar="dark">
+      <View style={styles.container}>
+        <BrandLogo />
+        <Label variant="heading">Terms & Conditions</Label>
+
+        <View style={styles.body}>
+          <Label 
+            size={14} 
+            color={Colors.secondary}
+            style={styles.text}
+            variant="body"
+          >
+            Welcome to Micro2Move! Please read these Terms and Conditions carefully before using our services. By accessing or using the service, you agree to be bound by these terms. If you disagree with any part of the terms, you may not access the service.
+            {"\n\n"}
+            Our service allows you to connect with a community of safe biking enthusiasts, providing resources, tutorials, and e-bike sharing opportunities. We are committed to promoting safe biking practices in Sydney.
+            {"\n\n"}
+            You are responsible for complying with all local laws regarding biking and ensuring your safety while using our service. We are not liable for any injuries or damages sustained while using the service. For more information on our privacy policy and user respon...{" "}
+            
+            <Label 
+              size={14} 
+              bold
+              variant="body"
+              color={Colors.primary} 
+              onPress={() => console.log("Read More Clicked")}
+              style={{ textDecorationLine: 'underline' }}
+            >
+              Read more
+            </Label>
+          </Label>
+        </View>
+
+        <View style={styles.footer}>
+          <Button 
+            title="Ok" 
+            variant="primary" 
+            onPress={() => router.back()} 
+          />
+        </View>
+      </View>
+    </ScreenWrapper>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    paddingHorizontal: 24,
+    paddingTop: 20,
+  },
+  body: {
+    marginBottom: 20,
+  },
+  text: {
+    lineHeight: 22,
+    textAlign: 'justify',
+  },
+  footer: {
+    marginTop: 20,
+  }
+});
+
+
+app\(tabs)\explore\_layout.jsx:
+
+import { Stack } from "expo-router";
+
+export default function ExploreLayout() {
+  return (
+    <Stack screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="index" />
+    </Stack>
+  );
+}
+
+app/(tabs)/explore/index.jsx:
+
+import Label from "@components/Label";
+import { View } from "react-native";
+
+export default function Explore() {
+  return (
+    <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+      <Label size={20} bold>
+        Explore E-Bikes
+      </Label>
+    </View>
+  );
+}
+
+
+app/(tabs)/my-bikes/_layout.jsx:
+
+import { Stack } from "expo-router";
+
+export default function MyBikesLayout() {
+  return (
+    <Stack screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="index" />
+      <Stack.Screen name="list" />
+    </Stack>
+  );
+}
+
+
+app/(tabs)/my-bikes/index.jsx:
+
+import Label from "@components/Label";
+import { View } from "react-native";
+
+export default function MyBikes() {
+  return (
+    <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+      <Label size={20} bold>
+        List an E-Bike
+      </Label>
+    </View>
+  );
+}
+
+
+app/(tabs)/my-bikes/list.jsx:
+
+import { View } from "react-native";
+import Label from "@components/Label";
+
+export default function BikeList() {
+  return (
+    <View style={{ flex: 1, padding: 24 }}>
+      <Label size={20} bold>
+        Bike Listings
+      </Label>
+    </View>
+  );
+}
+
+
+app/(tabs)/my-rides/_layout.jsx:
+
+import { Stack } from "expo-router";
+
+export default function MyRidesLayout() {
+  return (
+    <Stack screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="index" />
+      <Stack.Screen name="booking-filter" />
+    </Stack>
+  );
+}
+
+
+app/(tabs)/my-rides/booking-bike-details.jsx:
+
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { useEffect, useMemo, useState } from "react";
+import { ActivityIndicator, FlatList, StyleSheet, Text, View } from "react-native";
+
+import BrandLogo from "../../../components/BrandLogo";
+import Button from "../../../components/Button";
+import Card from "../../../components/Card";
+import Label from "../../../components/Label";
+import ScreenWrapper from "../../../components/ScreenWrapper";
+import ScrollHint from "../../../components/ScrollHint";
+import { bikeService } from "../../../services/bikeService";
+import { Colors } from "../../../theme/colors";
+
+// ✅ Helper for Date Formatting
+const formatDate = (dateString) => {
+  if (!dateString) return null;
+  const date = new Date(dateString);
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getFullYear();
+  return `${day}-${month}-${year}`;
+};
+
+export default function RenterBikeDetails() {
+  const router = useRouter();
+  const { from, to, category, location, maxPrice } = useLocalSearchParams();
+
+  const [bikes, setBikes] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [hasScrolled, setHasScrolled] = useState(false); 
+
+  // ✅ Construct Date Range String once
+  const dateRangeString = useMemo(() => {
+    if (from && to) {
+        return `${formatDate(from)} to ${formatDate(to)}`;
+    }
+    return null;
+  }, [from, to]);
+
+  useEffect(() => {
+    const fetchBikes = async () => {
+      try {
+        const data = await bikeService.getAvailableBikes();
+        setBikes(data);
+      } catch (error) {
+        console.error("Failed to load bikes", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchBikes();
+  }, []);
+
+  const sortedBikes = useMemo(() => {
+    const filtered = bikes.filter(bike => {
+      if (location) {
+        const bikeLoc = bike.supplier?.location?.toLowerCase() || "";
+        if (!bikeLoc.includes(location.toLowerCase())) return false;
+      }
+      if (category && bike.type?.toLowerCase() !== category.toLowerCase()) return false;
+      if (maxPrice && bike.price > parseFloat(maxPrice)) return false;
+      return true;
+    });
+    return [...filtered].sort((a, b) => a.price - b.price);
+  }, [bikes, location, category, maxPrice]);
+
+  const highlightBike = sortedBikes.length > 0 ? sortedBikes[0] : null;
+  const similarBikes = sortedBikes.length > 1 ? sortedBikes.slice(1) : [];
+
+  const handleBookPress = (bike) => {
+    router.push({
+      pathname: "/(tabs)/my-rides/booking-confirmation",
+      params: { 
+        bikeId: bike.id,
+        from, 
+        to, 
+        price: bike.price 
+      },
+    });
+  };
+
+  const handleScroll = (event) => {
+    const offsetY = event.nativeEvent.contentOffset.y;
+    if (offsetY > 30 && !hasScrolled) {
+      setHasScrolled(true);
+    }
+  };
+
+  return (
+    <ScreenWrapper edges={['top', 'left', 'right']}>
+      <View style={styles.container}>
+        
+        <View style={styles.headerSpacing}>
+            <BrandLogo />
+        </View>
+
+        <View style={styles.titleContainer}>
+            <Label variant="heading" style={styles.headerText}>
+                Top Picks for You
+            </Label>
+            {location && (
+                <Label variant="caption" style={styles.subHeader}>
+                    in {location}
+                </Label>
+            )}
+        </View>
+
+        {loading ? (
+             <ActivityIndicator size="large" color={Colors.primary} style={{ marginTop: 20 }} />
+        ) : (
+            <View style={{ flex: 1 }}>
+              <FlatList
+                data={similarBikes}
+                keyExtractor={(item) => item.id}
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={styles.listContent}
+                onScroll={handleScroll}
+                scrollEventThrottle={16}
+                
+                ListHeaderComponent={
+                    highlightBike ? (
+                    <View style={styles.highlightWrapper}>
+                        <Card
+                            variant="highlight"
+                            title={highlightBike.title}
+                            subtitle={highlightBike.type} 
+                            price={highlightBike.price}
+                            image={highlightBike.image}
+                            rating={highlightBike.rating}
+                            badgeText={highlightBike.status?.toUpperCase()}
+                            storeName={highlightBike.supplier?.name}
+                            isVerified={highlightBike.isVerified} 
+                            
+                            // ✅ PASSING NEW PROPS
+                            location={highlightBike.supplier?.location}
+                            dateRange={dateRangeString}
+
+                            buttonTitle="Book This E-Bike"
+                            onBookPress={() => handleBookPress(highlightBike)}
+                        />
+                        
+                        {similarBikes.length > 0 && (
+                            <Label variant="subheading" style={styles.similarTitle}>Similar E-Bikes</Label>
+                        )}
+                    </View>
+                    ) : (
+                        <View style={styles.emptyState}>
+                            <Text style={styles.emptyText}>No bikes found matching your criteria.</Text>
+                            <Button 
+                                title="Adjust Filters" 
+                                variant="secondary" 
+                                onPress={() => router.back()} 
+                                style={{ marginTop: 20 }}
+                            />
+                        </View>
+                    )
+                }
+
+                renderItem={({ item }) => (
+                    <View style={styles.cardWrapper}>
+                        <Card
+                            variant="standard"
+                            title={item.title}
+                            subtitle={item.type}
+                            price={item.price}
+                            image={item.image}
+                            rating={item.rating}
+                            badgeText={item.status?.toUpperCase()}
+                            storeName={item.supplier?.name}
+                            isVerified={item.isVerified} 
+                            
+                            // ✅ PASSING NEW PROPS
+                            location={item.supplier?.location}
+                            dateRange={dateRangeString}
+
+                            buttonTitle="Book"
+                            onBookPress={() => handleBookPress(item)}
+                        />
+                    </View>
+                )}
+              />
+
+              <ScrollHint visible={!hasScrolled && similarBikes.length > 0} />
+            </View>
+        )}
+      </View>
+    </ScreenWrapper>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, paddingHorizontal: 16 },
+  headerSpacing: { marginTop: 10, marginBottom: 5 },
+  titleContainer: { marginBottom: 16 },
+  headerText: { color: Colors.black },
+  subHeader: { color: Colors.placeholderTextColor, marginTop: 4 },
+  listContent: { paddingBottom: 80 },
+  highlightWrapper: { marginBottom: 24 },
+  similarTitle: { marginTop: 10, marginBottom: 16 },
+  cardWrapper: { marginBottom: 16, alignItems: 'center' },
+  emptyState: { marginTop: 50, alignItems: 'center' },
+  emptyText: { fontSize: 16, color: Colors.placeholderTextColor, textAlign: 'center' }
+});
+
+
+app/(tabs)/my-rides/booking-confirmation.jsx:
+
+import { Ionicons } from "@expo/vector-icons";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { useEffect, useMemo, useState } from "react";
+import { ActivityIndicator, Alert, ScrollView, StyleSheet, View } from "react-native";
+
+import BrandLogo from "../../../components/BrandLogo";
+import Button from "../../../components/Button";
+import Card from "../../../components/Card";
+import Checkbox from "../../../components/Checkbox";
+import InfoModal from "../../../components/InfoModal";
+import Label from "../../../components/Label";
+import ScreenWrapper from "../../../components/ScreenWrapper";
+import ScrollHint from "../../../components/ScrollHint";
+import SupplierProfileView from "../../../components/SupplierProfileView";
+
+import { bikeService } from "../../../services/bikeService";
+import { Colors } from "../../../theme/colors";
+
+export default function RenterBookingConfirmation() {
+  const router = useRouter();
+  const { bikeId, from, to } = useLocalSearchParams();
+
+  const [bike, setBike] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [insuranceAccepted, setInsuranceAccepted] = useState(false);
+  const [hasScrolled, setHasScrolled] = useState(false);
+  
+  const [isSupplierModalVisible, setSupplierModalVisible] = useState(false);
+  const [isInsuranceModalVisible, setInsuranceModalVisible] = useState(false);
+
+  useEffect(() => {
+    const fetchBike = async () => {
+      try {
+        if (bikeId) {
+          const data = await bikeService.getBikeById(bikeId);
+          setBike(data);
+        }
+      } catch (error) {
+        Alert.alert("Error", "Could not load bike details.");
+        router.back();
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchBike();
+  }, [bikeId]);
+
+  const handleScroll = (event) => {
+    const offsetY = event.nativeEvent.contentOffset.y;
+    if (offsetY > 30 && !hasScrolled) {
+      setHasScrolled(true);
+    }
+  };
+
+  const { weeks, totalPrice } = useMemo(() => {
+    if (!from || !to || !bike) return { weeks: 0, totalPrice: 0 };
+    const startDate = new Date(from);
+    const endDate = new Date(to);
+    const diffTime = Math.abs(endDate - startDate);
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+    const calculatedWeeks = Math.max(1, Math.ceil(diffDays / 7));
+    return { weeks: calculatedWeeks, totalPrice: calculatedWeeks * bike.price };
+  }, [from, to, bike]);
+
+  if (loading) {
+    return (
+      <ScreenWrapper>
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color={Colors.primary} />
+        </View>
+      </ScreenWrapper>
+    );
+  }
+
+  return (
+    <ScreenWrapper edges={['top', 'left', 'right']}>
+      <View style={styles.headerSpacing}>
+        <BrandLogo />
+      </View>
+
+      <View style={{ flex: 1 }}>
+        <ScrollView 
+          showsVerticalScrollIndicator={false} 
+          contentContainerStyle={styles.scrollContent}
+          onScroll={handleScroll}
+          scrollEventThrottle={16}
+        >
+          {/* TOP SECTION: Highlight Card */}
+          <View style={styles.cardWrapper}>
+            <Card
+              variant="highlight"
+              title={bike.title}
+              subtitle={`${bike.type} E-BIKE`.toUpperCase()}
+              price={bike.price}
+              image={bike.image}
+              rating={bike.rating}
+              badgeText={bike.status?.toUpperCase()} 
+              storeName={bike.supplier?.name}
+              isVerified={bike.isVerified}
+              onSupplierPress={() => setSupplierModalVisible(true)}
+              
+              // 🚀 REMOVED: location & dateRange props.
+              // We rely on the "Details Section" below for this info.
+            />
+          </View>
+
+          {/* DETAILS SECTION (Detailed Info) */}
+          <View style={styles.detailsContainer}>
+            <View style={styles.detailRow}>
+              <Ionicons name="location-outline" size={20} color={Colors.primary} />
+              <Label variant="body" secondary style={styles.detailText}>
+                {bike.supplier?.location || "Location provided upon booking"}
+              </Label>
+            </View>
+
+            <View style={styles.detailRow}>
+              <Ionicons name="calendar-outline" size={20} color={Colors.primary} />
+              <Label variant="body" secondary style={styles.detailText}>
+                From <Label variant="body" bold secondary>{new Date(from).toLocaleDateString()}</Label> To <Label variant="body" bold secondary>{new Date(to).toLocaleDateString()}</Label>
+              </Label>
+            </View>
+
+            <View style={styles.detailRow}>
+              <Ionicons name="cash-outline" size={20} color={Colors.primary} />
+              <Label variant="body" secondary style={styles.detailText}>
+                Total ({weeks} weeks): <Label variant="body" bold secondary color={Colors.primary}>${totalPrice}</Label>
+              </Label>
+            </View>
+
+            <View style={styles.supplierRow}>
+              <Ionicons name="business-outline" size={20} color={Colors.primary} />
+              <Button 
+                title={`About ${bike.supplier?.name}`}
+                variant="hyperlink"
+                onPress={() => setSupplierModalVisible(true)}
+                style={styles.hyperlinkButton}
+                textSize={16} 
+              />
+            </View>
+          </View>
+
+          <View style={styles.divider} />
+
+          {/* INSURANCE SECTION */}
+          <View style={styles.checkboxRow}>
+            <Checkbox
+              checked={insuranceAccepted}
+              onPress={() => setInsuranceAccepted(!insuranceAccepted)}
+              size={24}
+            />
+            <Label variant="body" secondary style={styles.checkboxLabel}>
+              Purchase mandatory{" "}
+              <Label 
+                variant="body" bold secondary
+                color={Colors.primary} 
+                style={{ textDecorationLine: 'underline' }}
+                onPress={() => setInsuranceModalVisible(true)}
+              >
+                insurance
+              </Label>
+            </Label>
+          </View>
+
+          <Button
+            title={insuranceAccepted ? "Confirm Booking" : "Accept Insurance to Book"}
+            variant="primary"
+            onPress={() => {
+              Alert.alert("Success", "E-Bike booked successfully!");
+              router.replace("/(tabs)/my-rides");
+            }}
+            disabled={!insuranceAccepted}
+            style={{ 
+              marginTop: 10,
+              opacity: insuranceAccepted ? 1 : 0.5 
+            }}
+          />
+        </ScrollView>
+
+        {/* MODAL 1: Supplier Profile */}
+        <InfoModal 
+          visible={isSupplierModalVisible} 
+          title="Supplier Profile" 
+          onClose={() => setSupplierModalVisible(false)}
+        >
+          <SupplierProfileView supplier={bike.supplier} />
+        </InfoModal>
+
+        {/* MODAL 2: Insurance Details */}
+        <InfoModal 
+          visible={isInsuranceModalVisible} 
+          title="Insurance Policy" 
+          onClose={() => setInsuranceModalVisible(false)}
+        >
+          <View style={styles.insuranceContent}>
+             <Ionicons name="shield-checkmark" size={40} color={Colors.primary} style={styles.modalIcon} />
+             <Label bold style={styles.modalSubTitle}>Comprehensive Protection</Label>
+             <Label variant="body" style={styles.modalText}>
+               Our mandatory insurance covers you for accidental damage, third-party liability, and theft during your rental period.
+             </Label>
+             <View style={styles.bulletPoint}>
+                <Ionicons name="radio-button-on" size={8} color={Colors.primary} />
+                <Label style={styles.bulletText}>$100 Excess/Deductible on all claims.</Label>
+             </View>
+             <View style={styles.bulletPoint}>
+                <Ionicons name="radio-button-on" size={8} color={Colors.primary} />
+                <Label style={styles.bulletText}>24/7 Roadside assistance included.</Label>
+             </View>
+             <Label variant="caption" style={styles.disclaimer}>
+               Terms and conditions apply. Full policy document sent via email.
+             </Label>
+          </View>
+        </InfoModal>
+
+        <ScrollHint visible={!hasScrolled} />
+      </View>
+    </ScreenWrapper>
+  );
+}
+
+const styles = StyleSheet.create({
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  headerSpacing: { marginTop: 10, marginBottom: 5, paddingHorizontal: 16 },
+  scrollContent: { paddingBottom: 60, paddingHorizontal: 16, paddingTop: 5 },
+  cardWrapper: { marginBottom: 20 },
+  detailsContainer: { gap: 12, marginBottom: 10 },
+  detailRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  detailText: { color: "#4B5563", flex: 1 },
+  supplierRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  hyperlinkButton: { margin: 0, padding: 0, minHeight: 0, alignSelf: 'flex-start' },
+  divider: { height: 1, backgroundColor: Colors.border, marginVertical: 20 },
+  checkboxRow: { flexDirection: "row", alignItems: "center", marginBottom: 20, gap: 12 },
+  checkboxLabel: { color: Colors.black, flex: 1 },
+  
+  // Modal Specific Styles
+  insuranceContent: { alignItems: 'center', paddingVertical: 10 },
+  modalIcon: { marginBottom: 10 },
+  modalSubTitle: { color: Colors.black, marginBottom: 8, fontSize: 16 },
+  modalText: { textAlign: 'center', color: Colors.black, marginBottom: 15, lineHeight: 18 },
+  bulletPoint: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', marginBottom: 6, gap: 8 },
+  bulletText: { color: Colors.black, fontSize: 13 },
+  disclaimer: { color: Colors.placeholderTextColor, marginTop: 15, textAlign: 'center', fontStyle: 'italic' }
+});
+
+
+app/(tabs)/my-rides/booking-filter.jsx:
+
+import { useRouter } from "expo-router";
+import { useContext, useState } from "react";
+import { Alert, ScrollView, StyleSheet, View } from "react-native";
+
+import BrandLogo from "../../../components/BrandLogo";
+import Button from "../../../components/Button";
+import Label from "../../../components/Label";
+import ScreenWrapper from "../../../components/ScreenWrapper";
+import ScrollHint from "../../../components/ScrollHint"; // ✅ In case of small screens
+
+import DateRangePicker from "../../../components/DateRangePicker";
+import Dropdown from "../../../components/Dropdown";
+import LocationSelector from "../../../components/LocationSelector";
+import PriceRangeSlider from "../../../components/PriceRangeSlider";
+
+import { AuthContext } from "../../../context/AuthContext";
+import { BikeType } from "../../../services/mockBikeData";
+import { Colors } from "../../../theme/colors";
+
+const CATEGORY_OPTIONS = Object.values(BikeType);
+
+export default function RenterBookingFilter() {
+  const { user } = useContext(AuthContext);
+  const router = useRouter();
+
+  const [fromDate, setFromDate] = useState(null);
+  const [toDate, setToDate] = useState(null);
+  const [price, setPrice] = useState(100);
+  const [category, setCategory] = useState(null);
+  const [location, setLocation] = useState(null);
+  const [hasScrolled, setHasScrolled] = useState(false);
+
+  const handleContinue = () => {
+    if (!fromDate || !toDate || !category || !location) {
+      Alert.alert("Missing Details", "Please fill all fields before continuing");
+      return;
+    }
+
+    router.push({
+      pathname: "/(tabs)/my-rides/booking-bike-details",
+      params: {
+        from: fromDate.toISOString(),
+        to: toDate.toISOString(),
+        category,
+        location,
+        maxPrice: price
+      }
+    });
+  };
+
+  const handleScroll = (event) => {
+    const offsetY = event.nativeEvent.contentOffset.y;
+    if (offsetY > 20 && !hasScrolled) {
+      setHasScrolled(true);
+    }
+  };
+
+  return (
+    // ✅ Apply edges override to fit perfectly with the Tab Bar
+    <ScreenWrapper edges={['top', 'left', 'right']}>
+      <View style={{ flex: 1 }}>
+        
+        {/* FIXED HEADER */}
+        <View style={styles.headerContainer}>
+          <BrandLogo />
+        </View>
+
+        <ScrollView 
+          showsVerticalScrollIndicator={false} 
+          contentContainerStyle={styles.scrollContent}
+          onScroll={handleScroll}
+          scrollEventThrottle={16}
+        >
+          {/* WELCOME SECTION */}
+          <View style={styles.welcomeSection}>
+            <Label variant="heading" secondary style={styles.welcome}>
+              Welcome {user?.name ? user.name.split(' ')[0] : "User"}
+            </Label>
+            <Label variant="body" secondary color={Colors.placeholderTextColor}>
+              Set your preferences to find the perfect ride.
+            </Label>
+          </View>
+
+          {/* FILTERS */}
+          <View style={styles.filterSection}>
+            <DateRangePicker
+              fromLabel="From"
+              toLabel="To"
+              fromDate={fromDate}
+              toDate={toDate}
+              onFromChange={setFromDate}
+              onToChange={setToDate}
+            />
+
+            <PriceRangeSlider
+              value={price}
+              onValueChange={setPrice}
+            />
+
+            <Dropdown
+              label="Category"
+              options={CATEGORY_OPTIONS}
+              value={category}
+              onSelect={setCategory}
+            />
+
+            <LocationSelector
+              value={location}
+              onLocationSelected={setLocation}
+            />
+          </View>
+
+          {/* ACTION BUTTONS */}
+          <View style={styles.actionButtons}>
+            <Button
+              title="Continue"
+              variant="primary"
+              onPress={handleContinue}
+            />
+
+            <Button
+              title="Visit My Bookings"
+              variant="secondary"
+              onPress={() => router.push("/(tabs)/my-rides")}
+            />
+          </View>
+        </ScrollView>
+
+        {/* ✅ Hint only shows if the device screen is small enough to require scrolling */}
+        <ScrollHint visible={!hasScrolled} />
+      </View>
+    </ScreenWrapper>
+  );
+}
+
+const styles = StyleSheet.create({
+  headerContainer: {
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 5,
+  },
+  scrollContent: {
+    paddingHorizontal: 16,
+    paddingBottom: 40,
+  },
+  welcomeSection: {
+    marginTop: 10,
+    marginBottom: 20,
+  },
+  welcome: {
+    marginBottom: 4,
+  },
+  filterSection: {
+    gap: 20,
+  },
+  actionButtons: {
+    marginTop: 30,
+    gap: 12,
+  }
+});
+
+
+app/(tabs)/my-rides/current-booking.jsx:
+
+import { Ionicons } from "@expo/vector-icons";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, Alert, Animated, KeyboardAvoidingView, Linking, Platform, ScrollView, StyleSheet, TextInput, View } from "react-native";
+
+import Button from "../../../components/Button";
+import Card from "../../../components/Card";
+import Checkbox from "../../../components/Checkbox";
+import ImageUploader from "../../../components/ImageUploader";
+import InfoModal from "../../../components/InfoModal";
+import Label from "../../../components/Label";
+import ScreenWrapper from "../../../components/ScreenWrapper";
+import ScrollHint from "../../../components/ScrollHint";
+import SupplierProfileView from "../../../components/SupplierProfileView";
+
+import { bikeService } from "../../../services/bikeService";
+import { Colors } from "../../../theme/colors";
+
+const BouncingIcon = ({ name, color, size }) => {
+  const bounce = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(bounce, { toValue: -6, duration: 600, useNativeDriver: true }),
+        Animated.timing(bounce, { toValue: 0, duration: 600, useNativeDriver: true })
+      ]), { iterations: 6 } 
+    ).start();
+  }, []);
+  return (
+    <Animated.View style={{ transform: [{ translateY: bounce }] }}>
+      <Ionicons name={name} size={size} color={color} />
+    </Animated.View>
+  );
+};
+
+const formatDate = (dateString) => {
+  if (!dateString) return "";
+  const date = new Date(dateString);
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getFullYear();
+  return `${day}-${month}-${year}`;
+};
+
+const FEATURES_LIST = [
+  "Battery charges and holds power",
+  "Motor assist functioning smoothly",
+  "Brakes responsive and reliable",
+  "Lights and indicators working",
+  "Display and controls operational",
+  "Tyres properly inflated, no damage",
+  "Frame, seat, pedals secure"
+];
+
+export default function CurrentBooking() {
+  const router = useRouter();
+  const { bikeId } = useLocalSearchParams();
+  
+  const [bike, setBike] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [hasScrolled, setHasScrolled] = useState(false);
+  
+  // Modals
+  const [isSupplierVisible, setSupplierModalVisible] = useState(false);
+  const [isInsuranceVisible, setInsuranceVisible] = useState(false); 
+  const [isCancelSheetVisible, setCancelSheetVisible] = useState(false); 
+  const [isPolicyModalVisible, setPolicyModalVisible] = useState(false); 
+  const [isFeaturesModalVisible, setFeaturesModalVisible] = useState(false);
+  const [isRaiseIssueVisible, setRaiseIssueVisible] = useState(false); 
+  
+  const [localStatus, setLocalStatus] = useState(null); 
+  const [issueDescription, setIssueDescription] = useState(""); 
+  const [issueImage, setIssueImage] = useState(null); 
+  
+  const [featuresConfirmed, setFeaturesConfirmed] = useState(false);
+  const [featureChecks, setFeatureChecks] = useState(new Array(FEATURES_LIST.length).fill(true));
+
+  useEffect(() => {
+    const fetchBike = async () => {
+      try {
+        if (bikeId) {
+          const data = await bikeService.getBikeById(bikeId);
+          setBike(data);
+          if (data.status === "Active") setLocalStatus("Active");
+        }
+      } catch (error) {
+        Alert.alert("Error", "Could not load booking details");
+        router.back();
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchBike();
+  }, [bikeId]);
+
+  const handleScroll = (event) => {
+    const offsetY = event.nativeEvent.contentOffset.y;
+    if (offsetY > 30 && !hasScrolled) setHasScrolled(true);
+  };
+
+  const bookingPhase = useMemo(() => {
+    if (!bike) return "LOADING";
+    if (localStatus === "Active") return "ACTIVE_RIDE"; 
+    const today = new Date();
+    today.setHours(0,0,0,0);
+    const startDate = new Date(bike.startDate);
+    startDate.setHours(0,0,0,0);
+    if (today >= startDate) return "READY_FOR_PICKUP";
+    return "UPCOMING";
+  }, [bike, localStatus]);
+
+  const bookingDetails = useMemo(() => {
+     if(!bike) return null;
+     const start = new Date(bike.startDate);
+     const end = new Date(bike.endDate);
+     const diffTime = Math.abs(end - start);
+     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+     const weeks = Math.max(1, Math.ceil(diffDays / 7));
+     const total = weeks * bike.price;
+     return { startStr: start.toLocaleDateString(), endStr: end.toLocaleDateString(), weeks, totalPrice: total };
+  }, [bike]);
+
+  const handleConfirmPickup = () => {
+    Alert.alert("Ride Started", "Have a safe journey!", [
+        { text: "OK", onPress: () => router.replace("/(tabs)/my-rides") }
+    ]);
+  };
+
+  const handleReturn = () => {
+    Alert.alert("Return E-Bike", "Please ensure the bike is locked.", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Confirm", onPress: () => router.replace("/(tabs)/my-rides") }
+    ]);
+  };
+
+  const handleConfirmCancel = () => {
+    setCancelSheetVisible(false);
+    Alert.alert("Cancelled", "Your booking has been cancelled successfully.", [
+        { text: "OK", onPress: () => router.back() }
+    ]);
+  };
+
+  const handleSubmitIssue = () => {
+    setRaiseIssueVisible(false);
+    if (bookingPhase === "READY_FOR_PICKUP") {
+        Alert.alert("Booking Cancelled", "Issue reported. Your booking has been cancelled.", [
+            { text: "OK", onPress: () => router.back() }
+        ]);
+    } else {
+        Alert.alert("Incident Reported", "Our support team will contact you shortly.", [
+            { text: "OK", onPress: () => router.back() }
+        ]);
+    }
+  };
+
+  const toggleFeature = (index) => {
+    const updated = [...featureChecks];
+    updated[index] = !updated[index];
+    setFeatureChecks(updated);
+  };
+
+  const canRaiseIssue = featureChecks.some((isChecked) => !isChecked);
+
+  if (loading || !bike) {
+    return (
+        <ScreenWrapper>
+            <View style={styles.center}><ActivityIndicator size="large" color={Colors.primary} /></View>
+        </ScreenWrapper>
+    );
+  }
+
+  return (
+    <ScreenWrapper edges={['top', 'left', 'right']}>
+      <View style={{ flex: 1 }}>
+          <ScrollView 
+            contentContainerStyle={styles.container}
+            onScroll={handleScroll}
+            scrollEventThrottle={16}
+            showsVerticalScrollIndicator={false}
+          >
+            {/* Header */}
+            <View style={styles.header}>
+                <Label variant="heading">{bookingPhase === "ACTIVE_RIDE" ? "Active Ride" : "Booking Details"}</Label>
+                <View style={[styles.statusBadge, bookingPhase === "ACTIVE_RIDE" ? { backgroundColor: Colors.success } : bookingPhase === "READY_FOR_PICKUP" ? { backgroundColor: Colors.primary } : { backgroundColor: Colors.secondary }]}>
+                    <Label style={styles.statusText}>{bookingPhase === "ACTIVE_RIDE" ? "RIDING" : bookingPhase === "READY_FOR_PICKUP" ? "READY" : "BOOKED"}</Label>
+                </View>
+            </View>
+
+            <View style={styles.cardWrapper}>
+                <Card variant="highlight" title={bike.title} subtitle={`${bike.type} E-BIKE`} price={bike.price} image={bike.image} rating={bike.rating} isVerified={bike.isVerified} storeName={bike.supplier?.name} onSupplierPress={() => setSupplierModalVisible(true)} badgeText="" />
+            </View>
+
+            {/* Details Section */}
+            <View style={styles.detailsContainer}>
+                <View style={styles.detailRow}>
+                    <Ionicons name="location-outline" size={20} color={Colors.primary} />
+                    <Label variant="body" secondary style={styles.detailText}>{bike.supplier?.location || "Location provided upon booking"}</Label>
+                </View>
+                <View style={styles.detailRow}>
+                    <Ionicons name="calendar-outline" size={20} color={Colors.primary} />
+                    <Label variant="body" secondary style={styles.detailText}>From <Label variant="body" bold secondary>{bookingDetails?.startStr}</Label> To <Label variant="body" bold secondary>{bookingDetails?.endStr}</Label></Label>
+                </View>
+                <View style={styles.detailRow}>
+                    <Ionicons name="business-outline" size={20} color={Colors.primary} />
+                        <Button 
+                        title={`About ${bike.supplier?.name}`}
+                        variant="hyperlink"
+                        onPress={() => setSupplierModalVisible(true)}
+                        style={styles.hyperlinkButton}
+                        textSize={16} 
+                        />
+                </View>
+                <View style={styles.detailRow}>
+                    <Ionicons name="shield-checkmark-outline" size={20} color={Colors.primary} />
+                    <Button title="Insurance details" variant="hyperlink" onPress={() => setInsuranceVisible(true)} style={styles.hyperlinkButton} textSize={15} />
+                </View>
+            </View>
+
+            <View style={styles.divider} />
+
+            {/* Info Box */}
+            <View style={styles.infoBox}>
+                
+                {/* ✅ UPDATED: Bouncing Icon for ALL 3 States */}
+                {bookingPhase === "UPCOMING" ? (
+                    <BouncingIcon name="time-outline" size={24} color={Colors.black} />
+                ) : bookingPhase === "READY_FOR_PICKUP" ? (
+                    <BouncingIcon name="location-outline" size={24} color={Colors.black} />
+                ) : (
+                    // ✅ Active Ride now bounces too
+                    <BouncingIcon name="speedometer-outline" size={24} color={Colors.black} />
+                )}
+                
+                <View style={styles.infoContent}>
+                    <Label bold style={styles.infoTitle}>
+                        {bookingPhase === "UPCOMING" && "Upcoming Reservation"}
+                        {bookingPhase === "READY_FOR_PICKUP" && "Ready for Pickup"}
+                        {bookingPhase === "ACTIVE_RIDE" && "Ride in Progress"}
+                    </Label>
+                    <Label variant="caption" style={styles.infoBody}>
+                        {bookingPhase === "UPCOMING" && "You can cancel free of charge up to 24 hours before your pickup time."}
+                        {bookingPhase === "READY_FOR_PICKUP" && "Please visit the supplier location to pick up your bike. Verify features before accepting."}
+                        {bookingPhase === "ACTIVE_RIDE" && "Ride carefully! Remember to lock the bike securely when parking."}
+                    </Label>
+                </View>
+            </View>
+
+            {/* Action Buttons */}
+            <View style={styles.actionSection}>
+                {bookingPhase === "UPCOMING" && <Button title="Cancel Booking" variant="secondary" onPress={() => setCancelSheetVisible(true)} />}
+                
+                {bookingPhase === "READY_FOR_PICKUP" && (
+                    <View style={{ gap: 16 }}>
+                        <View style={styles.checkboxRow}>
+                            <Checkbox checked={featuresConfirmed} onPress={() => setFeaturesConfirmed(!featuresConfirmed)} size={24} />
+                            <Label variant="body" secondary style={styles.checkboxLabel}>I confirm all <Label variant="body" bold color={Colors.primary} style={{ textDecorationLine: 'underline' }} onPress={() => setFeaturesModalVisible(true)}>e-bike features</Label> are working fine.</Label>
+                        </View>
+                        <Button title="Accept E-Bike" variant="primary" disabled={!featuresConfirmed} style={{ opacity: featuresConfirmed ? 1 : 0.5 }} onPress={handleConfirmPickup} />
+                    </View>
+                )}
+
+                {bookingPhase === "ACTIVE_RIDE" && (
+                    <View style={{ gap: 10 }}>
+                        <View style={styles.checkboxRow}>
+                            <Checkbox checked={featuresConfirmed} onPress={() => setFeaturesConfirmed(!featuresConfirmed)} size={24} />
+                            <Label variant="body" secondary style={styles.checkboxLabel}>I confirm all <Label variant="body" bold color={Colors.primary} style={{ textDecorationLine: 'underline' }} onPress={() => setFeaturesModalVisible(true)}>e-bike features</Label> are working fine.</Label>
+                        </View>
+                        <Button title="Return E-Bike" variant="primary" onPress={handleReturn} />
+                        <Button title="Report an Incident" variant="secondary" onPress={() => setRaiseIssueVisible(true)} />
+                    </View>
+                )}
+            </View>
+
+            {/* Debug Controls */}
+            <View style={styles.debugBox}>
+                <Label bold style={{marginBottom:8}}>🚧 Debug Controls (Testing)</Label>
+                <View style={{flexDirection:'row', gap:8, flexWrap:'wrap'}}>
+                    <Button title="Set Upcoming" variant="secondary" textSize={10} style={styles.debugBtn} onPress={() => { setBike({...bike, startDate: "2026-03-01"}); setLocalStatus(null); }} />
+                    <Button title="Set Ready" variant="secondary" textSize={10} style={styles.debugBtn} onPress={() => { setBike({...bike, startDate: "2026-01-29"}); setLocalStatus(null); }} />
+                    <Button title="Set Active" variant="secondary" textSize={10} style={styles.debugBtn} onPress={() => setLocalStatus("Active")} />
+                </View>
+            </View>
+          </ScrollView>
+          <ScrollHint visible={!hasScrolled} />
+      </View>
+
+      {/* --- MODALS --- */}
+      <InfoModal visible={isSupplierVisible} title="Supplier Profile" onClose={() => setSupplierModalVisible(false)}><SupplierProfileView supplier={bike.supplier} /></InfoModal>
+      
+      <InfoModal visible={isInsuranceVisible} title="Insurance" showCloseButton={false} onClose={() => setInsuranceVisible(false)}>
+          <View style={{ minHeight: 400, justifyContent: 'space-between' }}>
+             <View>
+                 <Label variant="body" style={{lineHeight: 22, marginBottom: 16}}>This booking includes comprehensive insurance for theft, accidental damage, and third-party liability.</Label>
+                 <Label variant="caption" bold style={{marginBottom: 4}}>Coverage Includes:</Label>
+                 <Label variant="caption" style={{marginBottom: 16}}>• Theft protection (with lock used){"\n"}• Accidental damage coverage{"\n"}• Third-party property damage</Label>
+             </View>
+             <Button title="Close" variant="secondary" onPress={() => setInsuranceVisible(false)} />
+          </View>
+      </InfoModal>
+
+      <InfoModal visible={isPolicyModalVisible} title="Cancellation Policy" onClose={() => setPolicyModalVisible(false)}>
+          <Label variant="body" style={{lineHeight: 20}}>Lorem Ipsum text...</Label>
+          <Button title="Close" variant="primary" onPress={() => setPolicyModalVisible(false)} style={{marginTop: 20}} />
+      </InfoModal>
+
+      <InfoModal visible={isCancelSheetVisible} title="Cancel Booking?" variant="bottom" onClose={() => setCancelSheetVisible(false)}>
+          <View style={{ gap: 12 }}>
+              <View style={styles.calcRow}><Label variant="body" secondary bold>Price</Label><Label variant="body" secondary>$136.00</Label></View>
+              <View style={styles.calcRow}><Label variant="body" secondary bold>Cancellation charge</Label><Label variant="body" secondary>$29.35</Label></View>
+              <View style={styles.calcRow}><Label variant="subheading" color={Colors.primary} bold>Return amount</Label><Label variant="subheading" color={Colors.primary} bold>$106.65</Label></View>
+              <View style={styles.policyBox}><Label variant="caption" bold color={Colors.primary} style={{marginBottom:4}}>Cancellation Policy</Label><Label variant="caption" style={{lineHeight: 18, color: Colors.placeholderTextColor}}>Lorem Ipsum... <Label variant="caption" bold color={Colors.primary} style={{textDecorationLine: 'underline'}} onPress={() => setPolicyModalVisible(true)}>Read more</Label></Label></View>
+              <Button title="Confirm" variant="secondary" onPress={handleConfirmCancel} style={{borderColor: Colors.primary, borderWidth: 1, marginTop: 10}} />
+              <Button title="Do Not Cancel, Go Back" variant="primary" onPress={() => setCancelSheetVisible(false)} />
+          </View>
+      </InfoModal>
+
+      <InfoModal visible={isFeaturesModalVisible} title="Your E-Bike's Features to Check" onClose={() => setFeaturesModalVisible(false)}>
+          <View>
+              <View style={styles.featureList}>
+                  {FEATURES_LIST.map((feature, index) => (
+                      <View key={index} style={styles.featureRow}>
+                          <Label variant="body" secondary style={{flex: 1, marginRight: 10}}>{feature}</Label>
+                          <Checkbox checked={featureChecks[index]} onPress={() => toggleFeature(index)} />
+                      </View>
+                  ))}
+              </View>
+              <Button title="Raise Issue" variant="primary" disabled={!canRaiseIssue} onPress={() => { setFeaturesModalVisible(false); setRaiseIssueVisible(true); }} style={{ marginTop: 24, opacity: canRaiseIssue ? 1 : 0.5 }} />
+          </View>
+      </InfoModal>
+
+      {/* ✅ RAISE ISSUE / REPORT INCIDENT MODAL (Dynamic Title) */}
+      <InfoModal 
+        visible={isRaiseIssueVisible} 
+        // ✅ Dynamic Title based on state
+        title={bookingPhase === "ACTIVE_RIDE" ? "Report Incident" : "Raise Issue"} 
+        variant="bottom" 
+        showCloseButton={false} 
+        onClose={() => setRaiseIssueVisible(false)}
+      >
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"}>
+            <View style={{ gap: 16 }}>
+                <View style={{ flexDirection: 'row', height: 50, marginBottom: 8 }}>
+                    <ImageUploader label={bookingPhase === "ACTIVE_RIDE" ? "Take Photo of Incident" : "Take Photo of Issue"} activeLabel="Photo Uploaded" icon="camera" imageUri={issueImage} onImageSelected={(uri) => setIssueImage(uri)} />
+                </View>
+                <View>
+                    <Label secondary style={{ marginBottom: 8, color: Colors.black }}> {bookingPhase === "ACTIVE_RIDE" ? "Describe the incident" : "Describe the issue"} </Label>
+                    <TextInput style={styles.issueInput} multiline placeholder="Type here..." value={issueDescription} onChangeText={setIssueDescription} />
+                </View>
+                <View style={{ gap: 10, marginTop: 10 }}>
+                    <Button 
+                        // ✅ Dynamic Button Text
+                        title={bookingPhase === "READY_FOR_PICKUP" ? "Raise Issue + Cancel Booking" : "Submit Report"} 
+                        variant={bookingPhase === "READY_FOR_PICKUP" ? "secondary" : "primary"} 
+                        onPress={handleSubmitIssue} 
+                    />
+                    <Button title={bookingPhase === "READY_FOR_PICKUP" ? "Ignore Issue, Go Back" : "Dial 000"}
+                        variant={bookingPhase === "READY_FOR_PICKUP" ? "primary" : "secondary"} 
+                        onPress={() => {
+                        if (bookingPhase === "READY_FOR_PICKUP") {
+                            setRaiseIssueVisible(false);
+                        } else {
+                            // ✅ Open Phone Dialer
+                            Linking.openURL("tel:000"); 
+                        }
+                        }} 
+                    />
+                    {bookingPhase === "ACTIVE_RIDE" && (
+                        <Button 
+                            title="Make an Insurance Claim"
+                            variant="secondary"
+                            onPress={() => {
+                                setRaiseIssueVisible(false);
+                                Alert.alert("Insurance Claim", "Redirecting to claims portal...");
+                            }} 
+                        />
+                    )}
+                </View>
+            </View>
+        </KeyboardAvoidingView>
+      </InfoModal>
+
+    </ScreenWrapper>
+  );
+}
+
+const styles = StyleSheet.create({
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  container: { padding: 16, paddingBottom: 60 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
+  statusBadge: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20 },
+  statusText: { color: Colors.white, fontSize: 12, fontWeight: '800' },
+  cardWrapper: { marginBottom: 20 },
+  detailsContainer: { gap: 12, marginBottom: 10 },
+  detailRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  detailText: { color: "#4B5563", flex: 1 },
+  hyperlinkButton: { margin: 0, padding: 0, minHeight: 0, alignSelf: 'flex-start' },
+  divider: { height: 1, backgroundColor: Colors.border, marginVertical: 20 },
+  infoBox: { flexDirection: 'row', backgroundColor: Colors.surface, padding: 16, borderRadius: 12, marginBottom: 30, borderWidth: 1, borderColor: Colors.border },
+  infoContent: { marginLeft: 12, flex: 1 },
+  infoTitle: { marginBottom: 4, color: Colors.black },
+  infoBody: { color: Colors.placeholderTextColor, lineHeight: 18 },
+  actionSection: { marginTop: 'auto' },
+  checkboxRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 4 },
+  checkboxLabel: { flex: 1, color: Colors.black },
+  featureList: { gap: 16, paddingVertical: 10 },
+  featureRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  debugBox: { marginTop: 40, padding: 16, backgroundColor: '#F3F4F6', borderRadius: 8, borderWidth:1, borderColor: '#ddd' },
+  debugBtn: { width: 'auto', paddingHorizontal: 10, height: 30 },
+  calcRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
+  policyBox: { backgroundColor: Colors.surface, padding: 12, borderRadius: 8, marginVertical: 10 },
+  
+  issueInput: {
+    height: 120,
+    backgroundColor: '#FDEEFF',
+    borderRadius: 8,
+    padding: 12,
+    textAlignVertical: 'top',
+    fontSize: 14,
+    color: Colors.black
+  }
+});
+
+app/(tabs)/my-rides/index.jsx:
+
+import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
+import { useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { ActivityIndicator, ScrollView, StyleSheet, View } from "react-native";
+
+import BrandLogo from "../../../components/BrandLogo";
+import Button from "../../../components/Button";
+import Card from "../../../components/Card";
+import CardCarousel from "../../../components/CardCarousel";
+import DateRangePicker from "../../../components/DateRangePicker";
+import Label from "../../../components/Label";
+import ScreenWrapper from "../../../components/ScreenWrapper";
+
+import { AuthContext } from "../../../context/AuthContext";
+import { bikeService } from "../../../services/bikeService";
+import { Colors } from "../../../theme/colors";
+
+// ✅ Helper to format date as DD-MM-YYYY
+const formatDate = (dateString) => {
+  if (!dateString) return "";
+  const date = new Date(dateString);
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getFullYear();
+  return `${day}-${month}-${year}`;
+};
+
+export default function RenterBookedBikesList() {
+  const { user } = useContext(AuthContext);
+  const router = useRouter();
+
+  const [allBookings, setAllBookings] = useState([]); 
+  const [filteredBookings, setFilteredBookings] = useState([]);
+  
+  const [fromDate, setFromDate] = useState(null);
+  const [toDate, setToDate] = useState(null);
+  
+  const [loading, setLoading] = useState(true);
+  const [hasScrolled, setHasScrolled] = useState(false);
+
+  // 1. Fetch Data
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        const data = await bikeService.getMyBookings();
+        setAllBookings(data);
+        setFilteredBookings(data); 
+      } catch (error) {
+        console.error("Failed to load bookings", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadData();
+  }, []);
+
+  // 2. Filter Logic
+  useEffect(() => {
+    if (allBookings.length === 0) return;
+
+    if (!fromDate && !toDate) {
+      setFilteredBookings(allBookings);
+      return;
+    }
+    const filterStart = fromDate ? new Date(fromDate).setHours(0,0,0,0) : null;
+    const filterEnd = toDate ? new Date(toDate).setHours(23,59,59,999) : null;
+
+    const results = allBookings.filter((booking) => {
+      const bookingStart = new Date(booking.startDate).getTime();
+      const bookingEnd = new Date(booking.endDate).getTime();
+      if (filterStart && !filterEnd) return bookingEnd >= filterStart;
+      if (!filterStart && filterEnd) return bookingStart <= filterEnd;
+      return (bookingStart <= filterEnd) && (bookingEnd >= filterStart);
+    });
+    setFilteredBookings(results);
+  }, [fromDate, toDate, allBookings]);
+
+  // 3. Helper Functions
+  const handleBookingPress = useCallback((item) => {
+    router.push({
+      pathname: "/(tabs)/my-rides/current-booking",
+      params: { bikeId: item.id },
+    });
+  }, []);
+
+  const formatBookingForCard = useCallback((booking) => {
+    let badge = booking.condition || booking.status || "";
+    if (badge === "Available") badge = "Available Now";
+    
+    // ✅ Calculate formatted dates
+    const start = formatDate(booking.startDate);
+    const end = formatDate(booking.endDate);
+
+    return {
+      id: booking.id,
+      title: booking.title,
+      subtitle: booking.type ? `${booking.type} E-BIKE`.toUpperCase() : "E-BIKE",
+      price: booking.price,
+      image: booking.image,
+      rating: booking.rating,
+      badgeText: badge.toUpperCase(),
+      storeName: booking.supplier?.name,
+      isVerified: booking.isVerified,
+      // ✅ Pass Location & Date Range
+      location: booking.supplier?.location || "Sydney, AU",
+      dateRange: `${start} to ${end}`,
+      originalData: booking 
+    };
+  }, []);
+
+  const activeRide = useMemo(() => {
+    const ride = allBookings.find(b => b.status === "Active");
+    return ride ? formatBookingForCard(ride) : null;
+  }, [allBookings, formatBookingForCard]);
+
+  const carouselData = useMemo(() => {
+    const rawList = filteredBookings.filter(b => b.id !== activeRide?.id);
+    return rawList.map(formatBookingForCard);
+  }, [filteredBookings, activeRide, formatBookingForCard]);
+
+
+  // --- RENDER HELPERS ---
+
+  const renderEmptyState = () => (
+    <View style={styles.zeroStateContainer}>
+      <View style={styles.zeroStateIconCircle}>
+        <Ionicons name="bicycle" size={60} color={Colors.primary} />
+      </View>
+      <Label variant="heading" style={styles.zeroStateTitle}>No Rides Yet</Label>
+      <Label variant="body" style={styles.zeroStateText}>
+        You haven't booked any e-bikes. Start your journey by finding the perfect ride near you.
+      </Label>
+      <Button
+        title="Find an E-Bike"
+        variant="primary"
+        onPress={() => router.push("/(tabs)/my-rides/booking-filter")}
+        style={styles.zeroStateButton}
+      />
+    </View>
+  );
+
+  const renderDashboard = () => (
+    <View>
+      {/* HIGHLIGHT SECTION */}
+      {activeRide && (
+          <View style={styles.highlightSection}>
+              <Card
+                  {...activeRide}
+                  variant="highlight"
+                  buttonTitle="Manage Ride"
+                  onBookPress={() => handleBookingPress(activeRide.originalData || activeRide)}
+              />
+          </View>
+      )}
+
+      {/* LIST SECTION */}
+      <View style={styles.listSection}>
+          <View style={styles.sectionHeader}>
+              <Label variant="subheading" style={{ marginBottom: 4 }}>Your Booking History</Label>
+              {(fromDate || toDate) && (
+                  <Button 
+                      title="Clear Filter"
+                      variant="hyperlink"
+                      textSize={14}
+                      onPress={() => { setFromDate(null); setToDate(null); }}
+                      style={{ padding: 0 }} 
+                  />
+              )}
+          </View>
+
+          <View style={styles.filterRow}>
+            <View style={styles.column}>
+              <DateRangePicker
+                fromDate={fromDate}
+                toDate={toDate}
+                onFromChange={setFromDate}
+                onToChange={setToDate}
+              />
+            </View>
+          </View>
+
+          {carouselData.length > 0 ? (
+              <CardCarousel
+                data={carouselData}
+                actionLabel="View Booking"
+                onBookPress={(item) => handleBookingPress(item.originalData || item)}
+                flatListProps={{
+                    initialNumToRender: 2,
+                    maxToRenderPerBatch: 2,
+                    windowSize: 3,
+                    removeClippedSubviews: true,
+                }}
+              />
+          ) : (
+              <View style={styles.filterEmptyState}>
+                <Label style={styles.emptyText}>No bookings found for these dates.</Label>
+              </View>
+          )}
+      </View>
+      
+      <Button
+        title="Book a New E-Bike"
+        variant="primary"
+        onPress={() => router.push("/(tabs)/my-rides/booking-filter")}
+        style={styles.actionButton}
+      />
+      <View style={{ height: 40 }} />
+    </View>
+  );
+
+  // --- MAIN RENDER ---
+  return (
+    <ScreenWrapper edges={['top', 'left', 'right']}>
+      <View style={styles.mainContainer}>
+        <View style={styles.headerContainer}>
+           <BrandLogo />
+        </View>
+
+        {loading ? (
+             <View style={styles.centerLoading}>
+                <ActivityIndicator size="large" color={Colors.primary} />
+             </View>
+        ) : (
+             <ScrollView
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={styles.scrollContent}
+                onScroll={(e) => {
+                   if (e.nativeEvent.contentOffset.y > 30 && !hasScrolled) setHasScrolled(true);
+                }}
+                scrollEventThrottle={16}
+             >
+                  <Label variant="heading" style={styles.welcome}>
+                    Welcome {user?.name ? user.name.split(' ')[0] : "Rider"}
+                  </Label>
+
+                  {allBookings.length === 0 ? renderEmptyState() : renderDashboard()}
+             </ScrollView>
+        )}
+      </View>
+    </ScreenWrapper>
+  );
+}
+
+const styles = StyleSheet.create({
+  mainContainer: { flex: 1, backgroundColor: Colors.white },
+  headerContainer: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 5 },
+  scrollContent: { paddingHorizontal: 16, paddingBottom: 40, flexGrow: 1 },
+  centerLoading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  welcome: { marginTop: 8, marginBottom: 20, color: Colors.black },
+  
+  // Zero State Styles
+  zeroStateContainer: { alignItems: 'center', justifyContent: 'center', marginTop: 60 },
+  zeroStateIconCircle: { 
+      width: 100, height: 100, borderRadius: 50, backgroundColor: Colors.surface, 
+      alignItems: 'center', justifyContent: 'center', marginBottom: 20 
+  },
+  zeroStateTitle: { marginBottom: 10, textAlign: 'center' },
+  zeroStateText: { textAlign: 'center', color: Colors.placeholderTextColor, paddingHorizontal: 40, marginBottom: 30, lineHeight: 22 },
+  zeroStateButton: { width: '80%' },
+
+  // Dashboard Styles
+  highlightSection: { marginBottom: 24 },
+  listSection: { marginBottom: 20 },
+  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  filterRow: { flexDirection: "row", gap: 12, marginTop: 10, marginBottom: 10 },
+  column: { flex: 1 },
+  filterEmptyState: { height: 100, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.surface, borderRadius: 12 },
+  emptyText: { color: Colors.placeholderTextColor, fontSize: 14 },
+  actionButton: { marginTop: 10, marginBottom: 10 }
+});
+
+
+app/(tabs)/_layout.jsx:
+
+import { Ionicons } from "@expo/vector-icons";
+import { Tabs, useRouter } from "expo-router";
+import { useContext } from "react";
+import { Pressable } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { AuthContext } from "../../context/AuthContext";
+import { TabIntentContext } from "../../context/TabIntentContext";
+import { Colors } from "../../theme/colors";
+import { Fonts } from "../../theme/fonts";
+
+export default function TabsLayout() {
+  const router = useRouter();
+  const insets = useSafeAreaInsets();
+
+  const { authStatus } = useContext(AuthContext);
+  const { setTabIntent } = useContext(TabIntentContext);
+
+  const handleProtectedTabPress = (e, intent) => {
+    if (authStatus !== "AUTHENTICATED") {
+      e.preventDefault();
+      setTabIntent(intent);
+      router.push("/(auth)/signin");
+    }
+  };
+
+  return (
+    <Tabs 
+      screenOptions={{ 
+        headerShown: false,
+        tabBarActiveTintColor: Colors.primary,
+        tabBarInactiveTintColor: Colors.tabInactive,
+        tabBarStyle: {
+          height: 60 + insets.bottom,
+          paddingBottom: insets.bottom + 5,
+          paddingTop: 5,
+        },
+        tabBarLabelStyle: {
+          fontSize: 12,
+          fontFamily: Fonts.secondary,
+        },
+        tabBarButton: (props) => (
+          <Pressable
+            {...props}
+            android_ripple={{ color: Colors.activeBackground, borderless: true, radius: 50 }}
+            style={({ pressed }) => [
+              props.style,
+              { 
+                opacity: pressed ? 0.5 : 1,
+                transform: [{ scale: pressed ? 0.96 : 1 }] 
+              }
+            ]}
+          />
+        ),
+      }}
+    >
+      
+      <Tabs.Screen 
+        name="explore" 
+        options={{
+          tabBarLabel: "Explore",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="search-outline" size={size} color={color} />
+          ),
+        }}
+      />
+
+      <Tabs.Screen 
+        name="my-rides" 
+        listeners={{
+          tabPress: (e) => handleProtectedTabPress(e, "RIDES"),
+        }}
+        options={{
+          tabBarLabel: "My Rides",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="calendar-outline" size={size} color={color} />
+          ),
+        }}
+      />
+
+      <Tabs.Screen 
+        name="my-bikes" 
+        listeners={{
+          tabPress: (e) => handleProtectedTabPress(e, "BIKES"),
+        }}
+        options={{
+          tabBarLabel: "My Bikes",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="bicycle-outline" size={size} color={color} />
+          ),
+        }}
+      />
+
+      <Tabs.Screen 
+        name="profile" 
+        listeners={{
+          tabPress: (e) => handleProtectedTabPress(e, "PROFILE"),
+        }}
+        options={{
+          tabBarLabel: "Profile",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="person-outline" size={size} color={color} />
+          ),
+        }}
+      />
+
+    </Tabs>
+  );
+}
+
+
+app/(tabs)/profile.jsx:
+
+import { useRouter } from "expo-router";
+import { useContext } from "react";
+import { StyleSheet, View } from "react-native";
+import Button from "../../components/Button";
+import Label from "../../components/Label";
+import ScreenWrapper from "../../components/ScreenWrapper";
+import { AuthContext } from "../../context/AuthContext";
+import { Colors } from "../../theme/colors";
+
+export default function Profile() {
+  const router = useRouter();
+  const { logout } = useContext(AuthContext);
+  const handleLogout = async () => {
+    await logout();
+    router.replace("/landing");
+  };
+
+  return (
+    <ScreenWrapper mode="scroll">
+      <View style={styles.centerContent}>
+        <Label size={24} bold style={{ marginBottom: 20 }}>
+          Profile
+        </Label>
+
+        <Button
+          title="Logout"
+          variant="primary"
+          onPress={handleLogout}
+          style={styles.logoutButton}
+        />
+      </View>
+    </ScreenWrapper>
+  );
+}
+
+const styles = StyleSheet.create({
+  centerContent: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingVertical: 50,
+  },
+  logoutButton: {
+    backgroundColor: Colors.red,
+    width: 160, 
+    borderColor: Colors.red,
+  },
+});
+
+
+app/_layout.jsx:
+
+import { useFonts } from "expo-font";
+import { Stack } from "expo-router";
+import * as SplashScreen from "expo-splash-screen";
+import { useEffect } from "react";
+import { SafeAreaProvider } from "react-native-safe-area-context";
+
+import { AuthProvider } from "../context/AuthContext";
+import { EntryIntentProvider } from "../context/EntryIntentContext";
+import { TabIntentProvider } from "../context/TabIntentContext";
+
+SplashScreen.preventAutoHideAsync();
+
+export default function RootLayout() {
+  const [fontsLoaded] = useFonts({
+    "Comfortaa-Regular": require("../assets/fonts/Comfortaa-Regular.ttf"),
+    "Comfortaa-Bold": require("../assets/fonts/Comfortaa-Bold.ttf"),
+    "Lato-Regular": require("../assets/fonts/Lato-Regular.ttf"),
+    "Lato-Bold": require("../assets/fonts/Lato-Bold.ttf"),
+  });
+
+  useEffect(() => {
+    if (fontsLoaded) {
+      SplashScreen.hideAsync();
+    }
+  }, [fontsLoaded]);
+
+  if (!fontsLoaded) {
+    return null;
+  }
+
+  return (
+    <SafeAreaProvider>
+      <AuthProvider>
+        <EntryIntentProvider>
+          <TabIntentProvider>
+            <Stack screenOptions={{ headerShown: false }}>
+              <Stack.Screen name="index" /> 
+              <Stack.Screen name="landing" />
+              <Stack.Screen name="(auth)" />
+              <Stack.Screen name="(tabs)" />
+            </Stack>
+          </TabIntentProvider>
+        </EntryIntentProvider>
+      </AuthProvider>
+    </SafeAreaProvider>
+  );
+}
+
+
+app/index.jsx:
+
+import { Redirect } from "expo-router";
+
+export default function WebEntry() {
+  return <Redirect href="/splash" />;
+}
+
+
+app/landing.jsx:
+
+import { useRouter } from "expo-router";
+import { Image, StyleSheet, View } from "react-native";
+import Button from "../components/Button";
+import Label from "../components/Label";
+import ScreenWrapper from "../components/ScreenWrapper";
+import { useIntent } from "../hooks/useIntent";
+import { Colors } from "../theme/colors";
+
+export default function Landing() {
+  const router = useRouter();
+  const { setRentIntent, setListIntent } = useIntent();
+  const handleExplore = () => {
+    router.replace("/(tabs)/explore");
+  };
+
+  return (
+    <ScreenWrapper statusBar="dark">
+      <View style={styles.container}>
+        <View style={styles.heroSection}>
+          <View style={styles.circleBadge}>
+            <Image 
+              source={require("../assets/images/SplashLogo.png")} 
+              style={styles.heroLogo}
+              resizeMode="contain"
+            />
+            <Label size={14} color={Colors.white} style={styles.tagline}>
+              Shining the light on{'\n'}micro-mobility
+            </Label>
+          </View>
+        </View>
+
+        <View style={styles.actionContainer}>
+          <Button 
+            title="Rent a Bike" 
+            variant="primary"
+            onPress={setRentIntent}
+            style={styles.buttonSpacing}
+          />
+
+          <Button 
+            title="List a Bike" 
+            variant="primary"
+            onPress={setListIntent}
+            style={styles.buttonSpacing}
+          />
+
+          <Button 
+            title="Explore" 
+            variant="hyperlink"
+            onPress={handleExplore}
+            style={styles.exploreButton} 
+          />
+        </View>
+        
+      </View>
+    </ScreenWrapper>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    justifyContent: "center",
+  },
+  heroSection: {
+    marginBottom: 60,
+    alignItems: "center",
+  },
+  circleBadge: {
+    width: 280,
+    height: 280,
+    borderRadius: 140, 
+    backgroundColor: Colors.black, 
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+    shadowColor: Colors.black,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  heroLogo: {
+    width: 200, 
+    height: 200,
+    marginBottom: 0,
+  },
+  tagline: {
+    textAlign: "center",
+    lineHeight: 20,
+    opacity: 0.9,
+    marginTop: -10,
+  },
+  actionContainer: {
+    width: "100%", 
+    paddingHorizontal: 24,
+  },
+  buttonSpacing: {
+    marginBottom: 15,
+  },
+  exploreButton: {
+    marginTop: 10,
+    alignSelf: 'center',
+  },
+});
+
+
+app/splash.jsx:
+
+// Not ready for production, will be modified later
+
+import { useRouter } from "expo-router";
+import * as SplashScreen from 'expo-splash-screen';
+import { useContext, useEffect, useState } from "react";
+import { Dimensions, Image, StyleSheet, View } from "react-native";
+import Label from "../components/Label";
+import ScreenWrapper from "../components/ScreenWrapper";
+import { AuthStatus } from "../constants/types";
+import { AuthContext } from "../context/AuthContext";
+import { Colors } from "../theme/colors";
+
+SplashScreen.preventAutoHideAsync();
+
+const { width } = Dimensions.get('window');
+
+export default function SplashScreenComponent() {
+  const router = useRouter();
+  const { authStatus } = useContext(AuthContext);
+  const [isAppReady, setIsAppReady] = useState(false);
+  
+  const onImageLoaded = async () => {
+    try {
+      await SplashScreen.hideAsync();
+      setTimeout(() => {
+        setIsAppReady(true);
+      }, 2000); 
+    } catch (e) {
+      console.warn(e);
+      setIsAppReady(true);
+    }
+  };
+
+  useEffect(() => {
+    if (!isAppReady) return;
+    if (authStatus === AuthStatus.UNKNOWN) return;
+
+    if (authStatus === AuthStatus.AUTHENTICATED) {
+      router.replace("/(tabs)/explore");
+    } else {
+      router.replace("/landing");
+    }
+  }, [authStatus, isAppReady]); 
+
+  return (
+    <ScreenWrapper backgroundColor={Colors.black} statusBar="light" translucent={true}>
+      <View style={styles.contentContainer}>
+        
+        {/* --- Top Section --- */}
+        <View style={styles.topSection}>
+          <Label size={18} color={Colors.white} style={{ letterSpacing: 0.5 }}>
+            Making Sydney E-bike Friendly
+          </Label>
+        </View>
+
+        {/* --- Logo Container --- */}
+        <View style={styles.logoContainer}>
+          <Image 
+            source={require("../assets/images/SplashLogo.png")} 
+            style={styles.logo}
+            resizeMode="contain"
+            onLoad={onImageLoaded}
+            testID="splash-image"
+          />
+        </View>
+
+        {/* --- Footer --- */}
+        <View style={styles.footerContainer}>
+          <Label style={{ textAlign: 'center' }}>
+            <Label size={24} bold secondary color={Colors.secondary}>Affordable</Label>
+            <Label size={24} bold secondary color={Colors.primary}> Reliable</Label>
+            <Label size={24} bold secondary color={Colors.white}> Safe</Label>
+          </Label>
+        </View>
+
+      </View>
+    </ScreenWrapper>
+  );
+}
+
+const styles = StyleSheet.create({
+  contentContainer: {
+    flex: 1,
+    position: 'relative',
+    // ❌ DELETED: justifyContent: "center" (This was causing the shake)
+    // ❌ DELETED: alignItems: "center"
+  },
+  topSection: {
+    position: 'absolute',
+    top: '15%', 
+    width: '100%', // Ensure text centers horizontally
+    alignItems: 'center',
+    zIndex: 2,
+  },
+  logoContainer: {
+    // ✅ NEW: Absolute Position pins it to the screen edges.
+    // It will NOT move even if the view shrinks.
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    
+    // Now we center the image *inside* this pinned overlay
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 1, 
+  },
+  logo: {
+    width: width * 0.85, 
+    height: width * 0.85, 
+    maxHeight: 450,
+    maxWidth: 450,      
+  },
+  footerContainer: {
+    position: 'absolute',
+    bottom: '15%',
+    width: '100%', // Ensure text centers horizontally
+    alignItems: 'center',
+    zIndex: 2,
+  },
+});
+
+
+constants/types.js:
+
+/**
+ * Authentication Status of the current user.
+ * @readonly
+ * @enum {string}
+ */
+export const AuthStatus = Object.freeze({
+  UNKNOWN: "UNKNOWN",
+  AUTHENTICATED: "AUTHENTICATED",
+  UNAUTHENTICATED: "UNAUTHENTICATED",
+});
+
+/**
+ * User's intent when entering from the Landing Page.
+ * @readonly
+ * @enum {string}
+ */
+export const EntryIntent = Object.freeze({
+  RENT: "RENT",
+  LIST: "LIST",
+});
+
+/**
+ * Which specific tab/screen the user wants to jump to after login.
+ * @readonly
+ * @enum {string}
+ */
+export const TabIntent = Object.freeze({
+  RIDES: "RIDES",
+  BIKES: "BIKES",
+  PROFILE: "PROFILE",
+});
+
+
+context/AuthContext.js:
+
+import * as SecureStore from 'expo-secure-store';
+import { createContext, useEffect, useState } from "react";
+import { AuthStatus } from "../constants/types";
+import { authService } from "../services/authService";
+
+export const AuthContext = createContext({
+  authStatus: AuthStatus.UNKNOWN,
+  user: null, // ✅ Add user to the default context
+  setAuthStatus: () => {},
+  logout: async () => {}, 
+});
+
+export function AuthProvider({ children }) {
+  const [authStatus, setAuthStatus] = useState(AuthStatus.UNKNOWN);
+  const [user, setUser] = useState(null); // ✅ Add User State
+
+  useEffect(() => {
+    const checkLoginStatus = async () => {
+      try {
+        const token = await SecureStore.getItemAsync('user_token');
+        
+        if (token) {
+          // ✅ 1. Token found, set status
+          setAuthStatus(AuthStatus.AUTHENTICATED);
+          
+          // ✅ 2. Fetch User Details immediately
+          // (Assuming authService has a method to get the current user profile)
+          try {
+             // You need to implement getUserProfile in your authService if it doesn't exist
+             // It should normally call your backend endpoint: GET /users/me
+             const userData = await authService.getUserProfile(); 
+             setUser(userData);
+          } catch (err) {
+             console.error("Failed to fetch user profile", err);
+             // Optional: If fetching profile fails, maybe logout?
+          }
+
+        } else {
+          setAuthStatus(AuthStatus.UNAUTHENTICATED);
+          setUser(null);
+        }
+      } catch (e) {
+        console.error("Auth check failed:", e);
+        setAuthStatus(AuthStatus.UNAUTHENTICATED);
+        setUser(null);
+      }
+    };
+
+    checkLoginStatus();
+  }, []);
+
+  const logout = async () => {
+    try {
+      if (authService.logout) await authService.logout();
+    } catch (e) {
+      console.log("Backend logout ignored:", e);
+    }
+
+    await SecureStore.deleteItemAsync('user_token');
+
+    setAuthStatus(AuthStatus.UNAUTHENTICATED);
+    setUser(null); // ✅ Clear user on logout
+  };
+
+  return (
+    // ✅ Pass 'user' and 'setUser' to the app
+    <AuthContext.Provider value={{ authStatus, setAuthStatus, user, setUser, logout }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+
+context/EntryIntentContext.js:
+
+import { createContext, useState } from "react";
+import { EntryIntent } from "../constants/types"; // ✅ Imported for type safety/docs
+
+/**
+ * Context to track why the user is entering the app (Rent vs List).
+ * Values should be one of {@link EntryIntent} or null.
+ */
+export const EntryIntentContext = createContext({
+  entryIntent: null, 
+  setEntryIntent: () => {},
+});
+
+export function EntryIntentProvider({ children }) {
+  // We explicitly comment that this state holds an EntryIntent
+  const [entryIntent, setEntryIntent] = useState(null);
+
+  return (
+    <EntryIntentContext.Provider value={{ entryIntent, setEntryIntent }}>
+      {children}
+    </EntryIntentContext.Provider>
+  );
+}
+
+
+context/TabIntentContext.js:
+
+import { createContext, useState } from "react";
+import { TabIntent } from "../constants/types"; // ✅ Imported for type safety/docs
+
+/**
+ * Context to track deep links to specific tabs after login.
+ * Values should be one of {@link TabIntent} or null.
+ */
+export const TabIntentContext = createContext({
+  tabIntent: null,
+  setTabIntent: () => {},
+});
+
+export function TabIntentProvider({ children }) {
+  // The state can be null (default) or one of the TabIntent values
+  const [tabIntent, setTabIntent] = useState(null);
+
+  return (
+    <TabIntentContext.Provider value={{ tabIntent, setTabIntent }}>
+      {children}
+    </TabIntentContext.Provider>
+  );
+}
+
+
+hooks/useIntent.js:
+
+import { useRouter } from "expo-router";
+import { useContext } from "react";
+import { AuthStatus, EntryIntent, TabIntent } from "../constants/types";
+import { AuthContext } from "../context/AuthContext";
+import { EntryIntentContext } from "../context/EntryIntentContext";
+import { TabIntentContext } from "../context/TabIntentContext";
+
+export const useIntent = () => {
+  const router = useRouter();
+  const { authStatus } = useContext(AuthContext);
+  const { entryIntent, setEntryIntent } = useContext(EntryIntentContext);
+  const { tabIntent, setTabIntent } = useContext(TabIntentContext);
+
+  // 1. Handle "Rent" or "List" click from Landing
+  const navigateWithIntent = (intentType) => {
+    setEntryIntent(intentType);
+    
+    if (authStatus === AuthStatus.AUTHENTICATED) {
+      // User is logged in -> Go straight to destination
+      if (intentType === EntryIntent.RENT) {
+        router.push("/(tabs)/my-rides/booking-filter");
+      } else if (intentType === EntryIntent.LIST) {
+        router.push("/(tabs)/my-bikes/list");
+      }
+    } else {
+      // User is guest -> Go to Login
+      router.push("/(auth)/signin");
+    }
+  };
+
+  // 2. Resolve Intent after Login/Signup
+  const resolveIntent = () => {
+    // Priority 1: Deep links to Tabs (Rides/Bikes/Profile)
+    if (tabIntent) {
+      const target = tabIntent === TabIntent.RIDES ? "/(tabs)/my-rides" : 
+                     tabIntent === TabIntent.BIKES ? "/(tabs)/my-bikes" : 
+                     "/(tabs)/profile";
+      setTabIntent(null); 
+      router.replace(target);
+      return;
+    }
+
+    // Priority 2: Entry Intents (Rent/List)
+    if (entryIntent) {
+      const target = entryIntent === EntryIntent.RENT ? "/(tabs)/my-rides/booking-filter" : 
+                     "/(tabs)/my-bikes/list";
+      setEntryIntent(null); 
+      router.replace(target);
+      return;
+    }
+
+    // Priority 3: Default Home
+    router.replace("/(tabs)/explore");
+  };
+
+  return {
+    entryIntent,
+    tabIntent,
+    setRentIntent: () => navigateWithIntent(EntryIntent.RENT),
+    setListIntent: () => navigateWithIntent(EntryIntent.LIST),
+    resolveIntent,
+  };
+};
+
+
+services/apiClient.js:
+
+import axios from 'axios';
+import * as SecureStore from 'expo-secure-store';
+
+// ngrok URL for https local dev
+const BASE_URL = process.env.EXPO_PUBLIC_API_URL;
+
+const apiClient = axios.create({
+  baseURL: BASE_URL,  
+  timeout: 10000,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+apiClient.interceptors.request.use(
+  async (config) => {
+    try {
+      const token = await SecureStore.getItemAsync('user_token');
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+    } catch (error) {
+      console.log('Error attaching token:', error);
+    }
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
+
+export default apiClient;
+
+
+services/authService.js:
+
+import * as SecureStore from 'expo-secure-store';
+import apiClient from './apiClient';
+
+export const authService = {
+  async login(email, password) {
+    const response = await apiClient.post('/auth/signin', { email, password });
+    
+    if (response.data.access_token) {
+      await SecureStore.setItemAsync('user_token', response.data.access_token);
+    }
+    return response.data;
+  },
+
+  async register(name, email, password, dob) {
+    let formattedDob = dob;
+    if (dob.includes('/')) {
+        const [day, month, year] = dob.split('/');
+        formattedDob = `${year}-${month}-${day}`;
+    }
+
+    const payload = {
+      full_name: name,
+      email: email,
+      password: password,
+      date_of_birth: formattedDob 
+    };
+
+    const response = await apiClient.post('/auth/signup', payload);
+    return response.data;
+  },
+
+  async logout() {
+    try {
+      await apiClient.post('/auth/logout');
+    } catch (error) {
+      console.log("Backend logout failed:", error);
+    } finally {
+      await SecureStore.deleteItemAsync('user_token');
+    }
+  },
+
+  // ✅ NEW: Fetch User Profile
+  async getUserProfile() {
+    const token = await SecureStore.getItemAsync('user_token');
+    if (!token) throw new Error("No token found");
+
+    // ⚠️ IMPORTANT: Verify this endpoint with your backend. 
+    // It is commonly '/users/me' or '/auth/me'
+    const response = await apiClient.get('/users/user', {
+        headers: { Authorization: `Bearer ${token}` }
+    });
+
+    // ✅ DATA MAPPING:
+    // If backend returns 'full_name' but UI expects 'name', we map it here.
+    if (response.data.full_name && !response.data.name) {
+        return { ...response.data, name: response.data.full_name };
+    }
+
+    return response.data;
+  }
+};
+
+
+services/bikeService.js:
+
+import { MOCK_BIKES } from "./mockBikeData";
+
+export const bikeService = {
+  // Simulate GET /my-bookings
+  getMyBookings: async () => {
+    return new Promise((resolve) => {
+      // Returns the FULL list of 20 bikes (as per your snippet)
+      setTimeout(() => resolve(MOCK_BIKES), 500); 
+    });
+  },
+
+  // ✅ ADDED: This is called by the Booking Details screen
+  getAvailableBikes: async () => {
+    return new Promise((resolve) => {
+      setTimeout(() => resolve(MOCK_BIKES), 500);
+    });
+  },
+
+  // Simulate GET /bikes (The Explore Feed)
+  getAllBikes: async () => {
+    return new Promise((resolve) => {
+      setTimeout(() => resolve(MOCK_BIKES), 500);
+    });
+  },
+
+  // Simulate GET /bikes/:id
+  getBikeById: async (id) => {
+    return new Promise((resolve, reject) => {
+      const bike = MOCK_BIKES.find((b) => b.id === id);
+      setTimeout(() => {
+        if (bike) resolve(bike);
+        else reject(new Error("Bike not found"));
+      }, 300);
+    });
+  }
+};
+
+
+services/mockBikeData.js:
+
+// services/mockBikeData.js
+
+// 1. Define Bike Types (Enum-like)
+export const BikeType = {
+  MOUNTAIN: "Mountain",
+  ROAD: "Road",
+  CITY: "City",
+  CARGO: "Cargo",
+  HYBRID: "Hybrid"
+};
+
+// 2. Define Imaginary Suppliers
+// Added isVerified here for supplier-level trust
+const SUPPLIERS = [
+  { id: "sup-1", name: "VoltFleet Sydney", location: "Sydney CBD", isVerified: true },
+  { id: "sup-2", name: "E-Motion Rentals", location: "Kensington", isVerified: true },
+  { id: "sup-3", name: "GreenWheelz", location: "Bondi Junction", isVerified: false },
+  { id: "sup-4", name: "Urban Rider Co.", location: "Surry Hills", isVerified: false }
+];
+
+// 3. The Master List (20 Bikes: 10 Verified, 10 Not Verified)
+export const MOCK_BIKES = [
+  // --- GROUP A: Verified (10 Bikes) ---
+  {
+    id: "b1",
+    title: "Apex Predator X1",
+    subtitle: "$150/week",
+    price: 150,
+    status: "Active",
+    startDate: "2026-01-28",
+    endDate: "2026-02-10",
+    meta: "Jan 28 - Feb 10",
+    type: BikeType.MOUNTAIN,
+    isVerified: true, // 1
+    rating: 4.9,
+    reviewCount: 42,
+    image: require("../assets/images/SplashLogo.png"), 
+    supplier: SUPPLIERS[0],
+    features: { battery: true, brakes: true, lights: true, tyres: true }
+  },
+  {
+    id: "b2",
+    title: "Cargo King 500",
+    subtitle: "$200/week",
+    price: 200,
+    status: "Upcoming",
+    startDate: "2026-02-15",
+    endDate: "2026-02-20",
+    meta: "Feb 15 - Feb 20",
+    type: BikeType.CARGO,
+    isVerified: true, // 2
+    rating: 5.0,
+    reviewCount: 15,
+    image: require("../assets/images/SplashLogo.png"),
+    supplier: SUPPLIERS[1],
+    features: { battery: true, brakes: true, lights: true, tyres: true }
+  },
+  {
+    id: "b3",
+    title: "Road Warrior Pro",
+    subtitle: "$180/week",
+    price: 180,
+    status: "Active",
+    startDate: "2026-02-01",
+    endDate: "2026-02-07",
+    meta: "Feb 01 - Feb 07",
+    type: BikeType.ROAD,
+    isVerified: true, // 3
+    rating: 4.8,
+    reviewCount: 89,
+    image: require("../assets/images/SplashLogo.png"),
+    supplier: SUPPLIERS[2],
+    features: { battery: true, brakes: true, lights: true, tyres: true }
+  },
+  {
+    id: "b4",
+    title: "Urban Glide S",
+    subtitle: "$110/week",
+    price: 110,
+    status: "Upcoming",
+    startDate: "2026-03-01",
+    endDate: "2026-03-05",
+    meta: "Mar 01 - Mar 05",
+    type: BikeType.CITY,
+    isVerified: true, // 4
+    rating: 4.9,
+    reviewCount: 120,
+    image: require("../assets/images/SplashLogo.png"),
+    supplier: SUPPLIERS[3],
+    features: { battery: true, brakes: true, lights: true, tyres: true }
+  },
+  {
+    id: "b5",
+    title: "Summit Seeker",
+    subtitle: "$165/week",
+    price: 165,
+    status: "Active",
+    startDate: "2026-02-10",
+    endDate: "2026-02-15",
+    meta: "Feb 10 - Feb 15",
+    type: BikeType.MOUNTAIN,
+    isVerified: true, // 5
+    rating: 4.8,
+    reviewCount: 34,
+    image: require("../assets/images/SplashLogo.png"),
+    supplier: SUPPLIERS[0],
+    features: { battery: true, brakes: true, lights: true, tyres: true }
+  },
+  {
+    id: "b6",
+    title: "City Commuter 300",
+    subtitle: "$90/week",
+    price: 90,
+    status: "Upcoming",
+    startDate: "2026-03-10",
+    endDate: "2026-03-20",
+    meta: "Mar 10 - Mar 20",
+    type: BikeType.CITY,
+    isVerified: true, // 6
+    rating: 4.5,
+    reviewCount: 210,
+    image: require("../assets/images/SplashLogo.png"),
+    supplier: SUPPLIERS[1],
+    features: { battery: true, brakes: true, lights: true, tyres: true }
+  },
+  {
+    id: "b8",
+    title: "Bolt Runner",
+    subtitle: "$130/week",
+    price: 130,
+    status: "Upcoming",
+    startDate: "2026-04-01",
+    endDate: "2026-04-10",
+    meta: "Apr 01 - Apr 10",
+    type: BikeType.ROAD,
+    isVerified: true, // 7
+    rating: 4.6,
+    reviewCount: 78,
+    image: require("../assets/images/SplashLogo.png"),
+    supplier: SUPPLIERS[3],
+    features: { battery: true, brakes: true, lights: true, tyres: true }
+  },
+  {
+    id: "b9",
+    title: "Family Hauler",
+    subtitle: "$190/week",
+    price: 190,
+    status: "Upcoming",
+    startDate: "2026-03-15",
+    endDate: "2026-03-22",
+    meta: "Mar 15 - Mar 22",
+    type: BikeType.CARGO,
+    isVerified: true, // 8
+    rating: 4.4,
+    reviewCount: 12,
+    image: require("../assets/images/SplashLogo.png"),
+    supplier: SUPPLIERS[0],
+    features: { battery: true, brakes: true, lights: true, tyres: true }
+  },
+  {
+    id: "b11",
+    title: "Metro Zoom",
+    subtitle: "$85/week",
+    price: 85,
+    status: "Upcoming",
+    startDate: "2026-03-05",
+    endDate: "2026-03-12",
+    meta: "Mar 05 - Mar 12",
+    type: BikeType.CITY,
+    isVerified: true, // 9
+    rating: 4.7,
+    reviewCount: 300,
+    image: require("../assets/images/SplashLogo.png"),
+    supplier: SUPPLIERS[2],
+    features: { battery: true, brakes: true, lights: true, tyres: true }
+  },
+  {
+    id: "b13",
+    title: "Speedster 2000",
+    subtitle: "$160/week",
+    price: 160,
+    status: "Upcoming",
+    startDate: "2026-02-25",
+    endDate: "2026-03-01",
+    meta: "Feb 25 - Mar 01",
+    type: BikeType.ROAD,
+    isVerified: true, // 10
+    rating: 4.5,
+    reviewCount: 45,
+    image: require("../assets/images/SplashLogo.png"),
+    supplier: SUPPLIERS[0],
+    features: { battery: true, brakes: true, lights: true, tyres: true }
+  },
+
+  // --- GROUP B: Not Verified (10 Bikes) ---
+  {
+    id: "b7",
+    title: "Hybrid Explorer",
+    subtitle: "$105/week",
+    price: 105,
+    status: "Active",
+    startDate: "2026-02-05",
+    endDate: "2026-02-12",
+    meta: "Feb 05 - Feb 12",
+    type: BikeType.HYBRID,
+    isVerified: false,
+    rating: 4.3,
+    reviewCount: 56,
+    image: require("../assets/images/SplashLogo.png"),
+    supplier: SUPPLIERS[2],
+    features: { battery: true, brakes: true, lights: true, tyres: true }
+  },
+  {
+    id: "b10",
+    title: "Trail Blazer Entry",
+    subtitle: "$120/week",
+    price: 120,
+    status: "Active",
+    startDate: "2026-02-20",
+    endDate: "2026-02-25",
+    meta: "Feb 20 - Feb 25",
+    type: BikeType.MOUNTAIN,
+    isVerified: false,
+    rating: 4.2,
+    reviewCount: 30,
+    image: require("../assets/images/SplashLogo.png"),
+    supplier: SUPPLIERS[1],
+    features: { battery: true, brakes: true, lights: true, tyres: true }
+  },
+  {
+    id: "b12",
+    title: "Weekend Warrior",
+    subtitle: "$115/week",
+    price: 115,
+    status: "Active",
+    startDate: "2026-02-01",
+    endDate: "2026-02-03",
+    meta: "Feb 01 - Feb 03",
+    type: BikeType.HYBRID,
+    isVerified: false,
+    rating: 4.1,
+    reviewCount: 22,
+    image: require("../assets/images/SplashLogo.png"),
+    supplier: SUPPLIERS[3],
+    features: { battery: true, brakes: true, lights: true, tyres: true }
+  },
+  {
+    id: "b14",
+    title: "Grocery Getter",
+    subtitle: "$175/week",
+    price: 175,
+    status: "Upcoming",
+    startDate: "2026-02-12",
+    endDate: "2026-02-14",
+    meta: "Feb 12 - Feb 14",
+    type: BikeType.CARGO,
+    isVerified: false,
+    rating: 4.6,
+    reviewCount: 18,
+    image: require("../assets/images/SplashLogo.png"),
+    supplier: SUPPLIERS[1],
+    features: { battery: true, brakes: true, lights: true, tyres: true }
+  },
+  {
+    id: "b15",
+    title: "Eco Cruiser",
+    subtitle: "$95/week",
+    price: 95,
+    status: "Active",
+    startDate: "2026-02-18",
+    endDate: "2026-02-22",
+    meta: "Feb 18 - Feb 22",
+    type: BikeType.CITY,
+    isVerified: false,
+    rating: 4.0,
+    reviewCount: 110,
+    image: require("../assets/images/SplashLogo.png"),
+    supplier: SUPPLIERS[2],
+    features: { battery: true, brakes: true, lights: true, tyres: true }
+  },
+  {
+    id: "b16",
+    title: "Budget Beater",
+    subtitle: "$60/week",
+    price: 60,
+    status: "Active",
+    startDate: "2026-02-10",
+    endDate: "2026-02-15",
+    meta: "Feb 10 - Feb 15",
+    type: BikeType.CITY,
+    isVerified: false,
+    rating: 3.5,
+    reviewCount: 14,
+    image: require("../assets/images/SplashLogo.png"),
+    supplier: SUPPLIERS[3],
+    features: { battery: true, brakes: true, lights: true, tyres: true }
+  },
+  {
+    id: "b17",
+    title: "Rusty Trusty",
+    subtitle: "$55/week",
+    price: 55,
+    status: "Active",
+    startDate: "2026-01-29",
+    endDate: "2026-02-05",
+    meta: "Jan 29 - Feb 05",
+    type: BikeType.HYBRID,
+    isVerified: false,
+    rating: 2.8,
+    reviewCount: 5,
+    image: require("../assets/images/SplashLogo.png"),
+    supplier: SUPPLIERS[0],
+    features: { battery: true, brakes: true, lights: true, tyres: true }
+  },
+  {
+    id: "b18",
+    title: "Old School Electric",
+    subtitle: "$70/week",
+    price: 70,
+    status: "Upcoming",
+    startDate: "2026-03-20",
+    endDate: "2026-03-28",
+    meta: "Mar 20 - Mar 28",
+    type: BikeType.ROAD,
+    isVerified: false,
+    rating: 3.2,
+    reviewCount: 8,
+    image: require("../assets/images/SplashLogo.png"),
+    supplier: SUPPLIERS[1],
+    features: { battery: true, brakes: true, lights: true, tyres: true }
+  },
+  {
+    id: "b19",
+    title: "Heavy Haul (Gen 1)",
+    subtitle: "$100/week",
+    price: 100,
+    status: "Upcoming",
+    startDate: "2026-04-10",
+    endDate: "2026-04-20",
+    meta: "Apr 10 - Apr 20",
+    type: BikeType.CARGO,
+    isVerified: false,
+    rating: 3.8,
+    reviewCount: 20,
+    image: require("../assets/images/SplashLogo.png"),
+    supplier: SUPPLIERS[2],
+    features: { battery: true, brakes: true, lights: true, tyres: true }
+  },
+  {
+    id: "b20",
+    title: "Mountain Base",
+    subtitle: "$80/week",
+    price: 80,
+    status: "Active",
+    startDate: "2026-02-01",
+    endDate: "2026-02-08",
+    meta: "Feb 01 - Feb 08",
+    type: BikeType.MOUNTAIN,
+    isVerified: false,
+    rating: 3.9,
+    reviewCount: 25,
+    image: require("../assets/images/SplashLogo.png"),
+    supplier: SUPPLIERS[3],
+    features: { battery: true, brakes: true, lights: true, tyres: true }
+  }
+];
+
+
+theme/colors.js:
+
+export const Colors = {
+  primary: "#cb9bf0",
+  secondary: "#506445",
+  accent: "#e9e0ff",
+  black: "#000000",
+  white: "#FFFFFF",
+  placeholderTextColor: "#999999",
+  activeBackground: "#E6F4FE",
+  inputBackground: "#E6E6FA",
+  surface: "#F0F0F8",
+  border: "#E8E8F0",
+  borderDark: "#cccccc",
+  tabInactive: "#8E8E93",
+  red: "#E53935",
+  success: "#34C759",
+  transparent: "transparent",
+  verified: "#15803D",
+};
+
+
+theme/fonts.js:
+
+export const Fonts = {
+  primary: "Comfortaa-Regular",
+  primaryBold: "Comfortaa-Bold",
+  secondary: "Lato-Regular",
+  secondaryBold: "Lato-Bold",
+};
+
+
+utils/validators.js:
+
+export const isValidEmail = (email) => {
+  if (!email) return false;
+  // We trim whitespace just in case the user copy-pasted with spaces
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+};
+
+export const isAtLeast16 = (dob) => {
+  if (!dob) return false;
+
+  // 1. Ensure we are working with a Date object
+  const birthDate = new Date(dob);
+  const today = new Date();
+
+  // 2. Calculate the difference in years
+  let age = today.getFullYear() - birthDate.getFullYear();
+  const m = today.getMonth() - birthDate.getMonth();
+
+  // 3. Adjust if the birthday hasn't happened yet this year
+  if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
+    age--;
+  }
+
+  return age >= 16;
+};
+
+
+components/ActionRow.jsx:
+
+import { StyleSheet, View } from "react-native";
+import { Colors } from "../theme/colors";
+import Button from "./Button";
+import Label from "./Label";
+
+export default function ActionRow({ 
+  text, 
+  actionText, 
+  onActionPress, 
+  style,
+  size = 14
+}) {
+  return (
+    <View style={[styles.container, style]}>
+      <Label variant="body" size={size} color={Colors.tabInactive}>
+        {text}{" "}
+      </Label>
+      <Button 
+        title={actionText}
+        variant="hyperlink"
+        onPress={onActionPress}
+        textSize={size}
+        style={{ marginVertical: 0, paddingHorizontal: 0 }} 
+      />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { 
+    flexDirection: "row", 
+    justifyContent: "center", 
+    alignItems: "center", 
+    marginTop: 15 
+  },
+});
+
+
+components/BottomTab.jsx:
+
+import Label from "@/components/Label";
+import { Colors } from "@/theme/colors";
+import { Pressable, View } from "react-native";
+
+export default function BottomTab({ label, active, onPress }) {
+  return (
+    <Pressable onPress={onPress} style={{ flex: 1 }}>
+      <View
+        style={{
+          alignItems: "center",
+          paddingVertical: 10,
+          borderTopWidth: active ? 2 : 0,
+          borderTopColor: Colors.black,
+        }}
+      >
+        <Label 
+          size={12} 
+          bold={active}
+          color={Colors.black}
+        >
+          {label}
+        </Label>
+      </View>
+    </Pressable>
+  );
+}
+
+
+components/BrandLogo.jsx:
+
+import { Image, StyleSheet, View } from "react-native";
+import { Colors } from "../theme/colors";
+import Label from "./Label";
+
+export default function BrandLogo({ 
+  variant = "dark", 
+  showText = true,
+  style 
+}) {
+  const textColor = variant === "light" ? Colors.white : Colors.primary;
+
+  return (
+    <View style={[styles.container, style]}>
+      <Image 
+        source={require("../assets/images/LogoLightNoNameNoBg.png")} 
+        style={styles.logo}
+        resizeMode="contain"
+      />
+      {showText && (
+        <Label 
+          size={20} 
+          bold 
+          color={textColor} 
+          style={styles.text}
+        >
+          micro2move
+        </Label>
+      )}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 10, 
+  },
+  logo: {
+    width: 50,
+    height: 50,
+  },
+  text: {
+    marginTop: -2, 
+    marginBottom: 0,
+  }
+});
+
+
+components/Button.jsx:
+
+import Label from "@/components/Label";
+import { Colors } from "@/theme/colors";
+import { StyleSheet, TouchableOpacity } from "react-native";
+
+export default function Button({
+  title,
+  onPress,
+  variant = "primary",
+  style,
+  textSize = 20,
+  disabled = false
+}) {
+  const isSecondary = variant === "secondary";
+  const isHyperlink = variant === "hyperlink";
+  
+  let backgroundColor = Colors.primary;
+  let borderColor = Colors.transparent;
+  let borderWidth = 0;
+  let textColor = Colors.white;
+
+  if (isSecondary) {
+    backgroundColor = Colors.transparent;
+    borderColor = Colors.primary;
+    borderWidth = 2;
+    textColor = Colors.primary;
+  } else if (isHyperlink) {
+    backgroundColor = Colors.transparent;
+    borderColor = Colors.transparent;
+    borderWidth = 0;
+    textColor = Colors.primary;
+  }
+
+  if (disabled) {
+    backgroundColor = isHyperlink ? Colors.transparent : Colors.border;
+    borderColor = Colors.transparent;
+    textColor = Colors.tabInactive;
+  }
+
+  if (isHyperlink) {
+    return (
+      <TouchableOpacity
+        onPress={onPress}
+        disabled={disabled}
+        activeOpacity={0.5}
+        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        style={style}
+      >
+        <Label
+          bold
+          secondary
+          size={textSize}
+          color={textColor}
+          style={{ textDecorationLine: "underline" }}
+        >
+          {title}
+        </Label>
+      </TouchableOpacity>
+    );
+  }
+
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      disabled={disabled}
+      activeOpacity={0.8}
+      style={[
+        styles.container,
+        {
+          backgroundColor,
+          borderColor,
+          borderWidth,
+        },
+        style,
+      ]}
+    >
+      <Label
+        bold
+        secondary
+        size={textSize} 
+        color={textColor}
+      >
+        {title}
+      </Label>
+    </TouchableOpacity>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    height: 50,
+    borderRadius: 25,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    width: "100%",
+    marginVertical: 10,
+  },
+});
+
+
+components/Card.jsx:
+
+import { Ionicons } from "@expo/vector-icons";
+import { memo } from "react";
+import { Image, StyleSheet, Text, View } from "react-native";
+import { Colors } from "../theme/colors";
+import { Fonts } from "../theme/fonts";
+import Button from "./Button";
+import Label from "./Label";
+import VerifiedBadge from "./VerifiedBadge";
+
+const getBadgeColor = (text) => {
+  if (!text) return Colors.primary;
+  const t = text.toLowerCase();
+  
+  if (t.includes("mint") || t.includes("active")) return Colors.success; 
+  if (t.includes("excellent")) return Colors.secondary; 
+  if (t.includes("like new")) return Colors.secondary; 
+  if (t.includes("upcoming")) return Colors.primary; 
+  
+  return Colors.primary;
+};
+
+function Card({
+  title,
+  subtitle,   
+  price,
+  image,
+  badgeText,
+  rating,
+  storeName,
+  isVerified,
+  location,
+  dateRange,
+  onBookPress,
+  onSupplierPress, 
+  buttonTitle,     
+  variant = "standard",
+  testID,
+}) {
+  const badgeColor = getBadgeColor(badgeText);
+  const isHighlight = variant === "highlight";
+
+  return (
+    <View 
+      testID={testID} 
+      style={[
+        styles.card, 
+        isHighlight ? styles.cardHighlight : styles.cardStandard
+      ]}
+    >
+      {/* Image Section */}
+      <View style={[styles.imageContainer, { height: isHighlight ? 180 : 140 }]}>
+        <View style={styles.imageBackground}>
+            {image && <Image source={image} style={styles.image} resizeMode="cover" />}
+        </View>
+        
+        {/* Status Badge (Top Left) */}
+        {badgeText && (
+          <View style={[styles.badge, { backgroundColor: badgeColor }]}>
+            <Text style={styles.badgeText}>{badgeText}</Text>
+          </View>
+        )}
+
+        {/* Verified Badge (Top Right) */}
+        <View style={styles.verifiedBadgeContainer}>
+            <VerifiedBadge 
+                isVerified={isVerified} 
+                size="small" 
+            />
+        </View>
+      </View>
+
+      {/* Content Section */}
+      <View style={[styles.content, isHighlight && styles.contentHighlight]}>
+        
+        {/* 1. Header (Title + Star) */}
+        <View style={styles.headerRow}>
+            {/* ✅ Switched to secondaryBold (Lato-Bold) */}
+            <Label style={[styles.title, isHighlight && styles.titleHighlight]} numberOfLines={1}>
+                {title}
+            </Label>
+            {rating && (
+                <View style={styles.ratingTag}>
+                    <Ionicons name="star" size={12} color={Colors.primary} /> 
+                    <Label style={styles.ratingText}>{rating}</Label>
+                </View>
+            )}
+        </View>
+
+        {/* 2. Meta Container (Type, Location, Date, Store) */}
+        <View style={styles.metaContainer}>
+            
+            {/* A. Bike Type */}
+            <View style={styles.iconRow}>
+                <Ionicons name="bicycle" size={14} color={Colors.placeholderTextColor} />
+                <Label style={styles.subtitle} numberOfLines={1}>{subtitle}</Label>
+            </View>
+
+            {/* B. Location */}
+            {location && (
+              <View style={styles.iconRow}>
+                <Ionicons name="location-sharp" size={14} color={Colors.placeholderTextColor} />
+                <Label style={styles.metaText} numberOfLines={1}>{location}</Label>
+              </View>
+            )}
+
+            {/* C. Date Range */}
+            {dateRange && (
+              <View style={styles.iconRow}>
+                <Ionicons name="calendar-clear-outline" size={14} color={Colors.placeholderTextColor} />
+                <Label style={styles.metaText} numberOfLines={1}>{dateRange}</Label>
+              </View>
+            )}
+
+            {/* D. Store Name */}
+            {storeName && (
+              <View style={styles.storeRow}>
+                  <Ionicons name="business" size={14} color={Colors.placeholderTextColor} />
+                  <Label style={styles.storeText} numberOfLines={1}>
+                    {storeName}
+                  </Label>
+              </View>
+            )}
+        </View>
+
+        {/* 3. Footer */}
+        <View style={styles.footerRow}>
+          <View>
+            {/* ✅ Switched to secondaryBold (Lato-Bold) */}
+            <Text style={[styles.priceText, { fontSize: isHighlight ? 24 : 20 }]}>
+              ${price} <Text style={styles.perWeekText}>/week</Text>
+            </Text>
+          </View>
+          
+          {buttonTitle ? (
+            <Button 
+              title={buttonTitle}
+              onPress={onBookPress}
+              textSize={13} 
+              variant="primary" 
+              style={isHighlight ? styles.customButtonHighlight : styles.customButton} 
+            />
+          ) : null}
+        </View>
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  card: {
+    backgroundColor: Colors.black,
+    borderRadius: 16,
+    overflow: 'hidden',
+    shadowColor: Colors.black,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 4,
+    borderWidth: 1,
+    borderColor: Colors.borderDark,
+  },
+  cardStandard: { width: 280, marginRight: 12, marginBottom: 16 },
+  cardHighlight: { width: "100%", marginBottom: 24, borderColor: Colors.border },
+  
+  imageContainer: { width: "100%", position: 'relative' },
+  imageBackground: { width: "100%", height: "100%", backgroundColor: "#2C2C2C" },
+  image: { width: "100%", height: "100%" },
+  
+  // Status Badge
+  badge: { position: 'absolute', top: 10, left: 10, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6, zIndex: 10 },
+  badgeText: { 
+    color: Colors.white, 
+    fontSize: 10, 
+    fontFamily: Fonts.secondaryBold, // ✅ Lato-Bold
+    textTransform: 'uppercase' 
+  },
+  
+  // Verified Badge
+  verifiedBadgeContainer: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    zIndex: 10,
+  },
+
+  content: { padding: 14 },
+  contentHighlight: { padding: 16 },
+  
+  // Header Row
+  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  
+  title: { 
+    fontSize: 18, 
+    fontFamily: Fonts.secondaryBold, // ✅ Lato-Bold
+    color: Colors.white, 
+    flex: 1, 
+    marginRight: 8 
+  },
+  titleHighlight: { fontSize: 20 },
+  
+  ratingTag: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6 },
+  
+  ratingText: { 
+    color: Colors.white, 
+    fontSize: 12, 
+    fontFamily: Fonts.secondaryBold, // ✅ Lato-Bold
+    marginLeft: 4 
+  },
+  
+  metaContainer: {
+    gap: 6, 
+    marginBottom: 16,
+    marginTop: 4,
+  },
+
+  iconRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: 16, 
+  },
+  
+  subtitle: { 
+    fontSize: 10, 
+    color: Colors.placeholderTextColor, 
+    textTransform: 'uppercase', 
+    fontFamily: Fonts.secondaryBold, // ✅ Lato-Bold
+    marginLeft: 6, 
+    letterSpacing: 0.5 
+  },
+  
+  metaText: {
+    fontSize: 10,
+    color: Colors.placeholderTextColor,
+    fontFamily: Fonts.secondaryBold, // ✅ Lato-Bold
+    marginLeft: 6,
+    letterSpacing: 0.5
+  },
+
+  storeRow: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    height: 16, 
+  },
+  
+  storeText: { 
+    fontSize: 10, 
+    color: Colors.placeholderTextColor, 
+    fontFamily: Fonts.secondaryBold, // ✅ Lato-Bold
+    letterSpacing: 0.5,     
+    marginLeft: 6 
+  },
+  
+  footerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  
+  priceText: { 
+    fontFamily: Fonts.secondaryBold, // ✅ Lato-Bold
+    color: Colors.primary 
+  },
+  perWeekText: { 
+    fontSize: 12, 
+    fontFamily: Fonts.secondary, // ✅ Lato-Regular
+    color: Colors.placeholderTextColor 
+  },
+  
+  customButton: { width: 'auto', height: 38, paddingHorizontal: 20 },
+  customButtonHighlight: { width: 'auto', height: 44, paddingHorizontal: 24 }
+});
+
+export default memo(Card);
+
+
+components/CardCarousel.jsx:
+
+import { memo, useCallback } from "react";
+import { FlatList, StyleSheet, View } from "react-native";
+import Card from "./Card";
+import Label from "./Label";
+
+// Dimensions matches Card.jsx style (280 width + 12 margin)
+const CARD_WIDTH = 280;
+const CARD_MARGIN = 12;
+const TOTAL_ITEM_WIDTH = CARD_WIDTH + CARD_MARGIN;
+
+function CardCarousel({
+  data = [],
+  title,
+  onBookPress,
+  actionLabel = "Book Ride",
+  testID,
+  flatListProps // 👈 1. Accept this prop to allow parent control
+}) {
+  if (!data || data.length === 0) {
+    return null;
+  }
+
+  // 2. Optimized renderItem
+  const renderItem = useCallback(({ item }) => {
+    return (
+      <Card
+        {...item} 
+        variant="standard"
+        buttonTitle={actionLabel}
+        // ⚠️ Optimization: Pass the ID or Item to the parent handler later 
+        // instead of creating an arrow function here if possible.
+        // For now, this is okay provided 'Card' uses a smart memo check.
+        onBookPress={() => onBookPress?.(item)}
+      />
+    );
+  }, [onBookPress, actionLabel]);
+
+  // 3. Exact Layout Calculation (Crucial for performance)
+  const getItemLayout = useCallback((_, index) => ({
+    length: TOTAL_ITEM_WIDTH,
+    offset: TOTAL_ITEM_WIDTH * index,
+    index,
+  }), []);
+
+  return (
+    <View style={styles.container} testID={testID}>
+      {title && <Label style={styles.title}>{title}</Label>}
+
+      <FlatList
+        data={data}
+        horizontal
+        // Ensure ID is a string to avoid warnings
+        keyExtractor={(item) => String(item.id)} 
+        renderItem={renderItem}
+        getItemLayout={getItemLayout}
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.list}
+        
+        // 4. Spread parent optimizations first, then fallback to safe defaults
+        initialNumToRender={2}
+        maxToRenderPerBatch={2}
+        windowSize={3}
+        removeClippedSubviews={true} 
+        {...flatListProps} 
+      />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    marginVertical: 10,
+    // 5. ⚠️ FIXED HEIGHT: Helping 'removeClippedSubviews' work correctly
+    // Card height (approx 300) + Padding (10) + Title (approx 30)
+    height: 380, 
+  },
+  title: {
+    marginBottom: 12,
+    fontSize: 18,
+    fontWeight: "700",
+    marginLeft: 4, 
+  },
+  list: {
+    paddingRight: 16, 
+    paddingBottom: 10, 
+  },
+});
+
+export default memo(CardCarousel);
+
+
+components/Checkbox.jsx:
+
+import { Ionicons } from "@expo/vector-icons";
+import { StyleSheet, TouchableOpacity } from "react-native";
+import { Colors } from "../theme/colors";
+
+export default function Checkbox({ 
+  checked, 
+  onPress, 
+  style,
+  size = 22
+}) {
+  return (
+    <TouchableOpacity 
+      onPress={onPress}
+      activeOpacity={0.7}
+      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} 
+      style={[
+        styles.base, 
+        { width: size, height: size },
+        checked ? styles.checked : styles.unchecked,
+        style
+      ]}
+    >
+      {checked && (
+        <Ionicons name="checkmark" size={size * 0.7} color={Colors.white} />
+      )}
+    </TouchableOpacity>
+  );
+}
+
+const styles = StyleSheet.create({
+  base: {
+    borderRadius: 4,
+    borderWidth: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  unchecked: {
+    backgroundColor: Colors.surface,
+    borderColor: Colors.borderDark,
+  },
+  checked: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  }
+});
+
+
+components/DatePicker.jsx:
+
+import { Ionicons } from "@expo/vector-icons";
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { useState } from "react";
+import { Platform, StyleSheet, TouchableOpacity, View } from "react-native";
+import { Colors } from "../theme/colors";
+import Label from "./Label";
+
+export default function DatePicker({
+  label,
+  value,
+  onChange,
+  placeholder = "Select Date",
+  minDate,
+  maxDate,
+  error,
+  style,
+  inputStyle
+}) {
+  const [show, setShow] = useState(false);
+
+  const handleChange = (event, selectedDate) => {
+    if (Platform.OS === 'android') {
+      setShow(false);
+    }
+
+    if (event.type === 'dismissed') {
+       return;
+    }
+
+    if (selectedDate) {
+      onChange(selectedDate);
+    }
+  };
+
+  const displayString = value 
+    ? `${value.getDate().toString().padStart(2, '0')}/${(value.getMonth() + 1).toString().padStart(2, '0')}/${value.getFullYear()}`
+    : "";
+
+  return (
+    <View style={[styles.container, style]}>
+      
+      {label && (
+        <Label variant="label" color={Colors.primary} style={styles.label}>
+          {label}
+        </Label>
+      )}
+
+      <TouchableOpacity
+        onPress={() => setShow(!show)}
+        activeOpacity={0.8}
+        style={[
+          styles.inputContainer,
+          inputStyle,
+          error && { borderColor: Colors.red, borderWidth: 1 }
+        ]}
+      >
+        <Label 
+          secondary
+          size={16} 
+          color={displayString ? Colors.black : Colors.tabInactive}
+        >
+          {displayString || placeholder}
+        </Label>
+        
+        <Ionicons name="calendar-outline" size={20} color={Colors.tabInactive} />
+      </TouchableOpacity>
+
+      {show && (
+        <DateTimePicker
+          testID="dateTimePicker"
+          value={value || new Date()}
+          mode="date"
+          is24Hour={true}
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={handleChange}
+          minimumDate={minDate}
+          maximumDate={maxDate}
+          textColor={Colors.black}
+          accentColor={Colors.primary}
+        />
+      )}
+
+      {error && (
+        <Label variant="caption" color={Colors.red} style={styles.errorText}>
+          {error}
+        </Label>
+      )}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    marginBottom: 20,
+    width: "100%",
+  },
+  label: {
+    marginBottom: 8,
+    marginLeft: 10,
+  },
+  inputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between', 
+    height: 50,
+    backgroundColor: Colors.inputBackground,
+    borderRadius: 25,
+    paddingHorizontal: 20,
+    borderWidth: 1,
+    borderColor: Colors.transparent, 
+  },
+  errorText: {
+    marginTop: 4, 
+    marginLeft: 10
+  }
+});
+
+
+components/DateRangePicker.jsx:
+
+import { useEffect, useState } from "react";
+import { StyleSheet, View } from "react-native";
+import DatePicker from "./DatePicker";
+
+export default function DateRangePicker({
+  fromLabel = "From",
+  toLabel = "To",
+  fromDate,
+  toDate,
+  onFromChange,
+  onToChange,
+  minDate = new Date(),
+}) {
+  const [fromError, setFromError] = useState("");
+  const [toError, setToError] = useState("");
+
+  useEffect(() => {
+    // Reset To date if From becomes invalid
+    if (fromDate && toDate && fromDate >= toDate) {
+      onToChange(null);
+    }
+  }, [fromDate]);
+
+  const handleFromChange = (date) => {
+    setFromError("");
+    setToError("");
+    onFromChange(date);
+  };
+
+  const handleToChange = (date) => {
+    if (!fromDate) {
+      setToError("Select From date first");
+      return;
+    }
+
+    if (date <= fromDate) {
+      setToError("To date must be after From date");
+      return;
+    }
+
+    setToError("");
+    onToChange(date);
+  };
+
+  const minToDate = fromDate
+    ? new Date(fromDate.getTime() + 24 * 60 * 60 * 1000)
+    : minDate;
+
+  return (
+    <View style={styles.row}>
+      <View style={styles.column}>
+        <DatePicker
+          label={fromLabel}
+          value={fromDate}
+          minDate={minDate}
+          onChange={handleFromChange}
+          error={fromError}
+        />
+      </View>
+
+      <View style={styles.column}>
+        <DatePicker
+          label={toLabel}
+          value={toDate}
+          minDate={minToDate}
+          onChange={handleToChange}
+          error={toError}
+        />
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  row: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  column: {
+    flex: 1,
+  },
+});
+
+
+components/Dropdown.jsx:
+
+import { useState } from "react";
+import {
+  View,
+  StyleSheet,
+  TouchableOpacity,
+} from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import Label from "./Label";
+import { Colors } from "../theme/colors";
+
+export default function Dropdown({
+  label,
+  value,
+  options = [],
+  placeholder = "Select",
+  onSelect,
+  testID,
+}) {
+  const [open, setOpen] = useState(false);
+
+  const handleSelect = (option) => {
+    onSelect?.(option);
+    setOpen(false);
+  };
+
+  return (
+    <View style={styles.container}>
+      {label && (
+        <Label variant="label" style={styles.label}>
+          {label}
+        </Label>
+      )}
+
+      <TouchableOpacity
+        testID={testID}
+        style={styles.input}
+        activeOpacity={0.8}
+        onPress={() => setOpen(!open)}
+      >
+        <Label
+          secondary
+          color={value ? Colors.black : Colors.tabInactive}
+        >
+          {value || placeholder}
+        </Label>
+
+        <Ionicons
+          name={open ? "chevron-up" : "chevron-down"}
+          size={18}
+          color={Colors.tabInactive}
+        />
+      </TouchableOpacity>
+
+      {open && (
+        <View style={styles.options}>
+          {options.map((option) => (
+            <TouchableOpacity
+              key={option}
+              style={styles.option}
+              onPress={() => handleSelect(option)}
+            >
+              <Label>{option}</Label>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+    </View>
+  );
+}
+
+
+const styles = StyleSheet.create({
+  container: {
+    marginBottom: 10,
+  },
+  label: {
+    marginBottom: 8,
+    marginLeft: 10,
+  },
+  input: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    height: 50,
+    backgroundColor: Colors.inputBackground,
+    borderRadius: 25,
+    paddingHorizontal: 20,
+  },
+  options: {
+    marginTop: 6,
+    backgroundColor: Colors.white,
+    borderRadius: 16,
+    paddingVertical: 6,
+    elevation: 3,
+  },
+  option: {
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+  },
+});
+
+
+components/EmailInput.jsx:
+
+import TextField from "./TextField";
+
+export default function EmailInput({ 
+  value, 
+  onChangeText, 
+  error, 
+  label = "Email",
+  ...props 
+}) {
+  return (
+    <TextField
+      label={label}
+      value={value}
+      onChangeText={onChangeText}
+      error={error}
+      placeholder="Enter Email"
+      keyboardType="email-address"
+      autoCapitalize="none"
+      autoCorrect={false}
+      autoComplete="email"
+      {...props}
+    />
+  );
+}
+
+
+components/ImageUploader.jsx:
+
+import { Ionicons } from "@expo/vector-icons";
+import * as ImagePicker from 'expo-image-picker';
+import { Alert, Image, Linking, StyleSheet, TouchableOpacity } from "react-native";
+import { Colors } from "../theme/colors";
+import Label from "./Label";
+
+export default function ImageUploader({
+  label,
+  activeLabel,
+  icon,
+  imageUri,
+  onImageSelected,
+  aspect = [1, 1] 
+}) {
+  
+  const takePhoto = async () => {
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      
+      if (status !== 'granted') {
+        Alert.alert(
+          "Permission Required", 
+          "We need camera access to capture your ID. Please enable it in settings.",
+          [
+            { text: "Cancel", style: "cancel" },
+            { text: "Open Settings", onPress: () => Linking.openSettings() } 
+          ]
+        );
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: "Images", 
+        allowsEditing: true,
+        aspect: aspect,
+        quality: 0.5,
+      });
+
+      if (!result.canceled) {
+        onImageSelected(result.assets[0].uri);
+      }
+
+    } catch (error) {
+      console.log("CAMERA ERROR:", error);
+      Alert.alert("Camera Error", error.message || "Could not open camera.");
+    }
+  };
+
+  const displayText = imageUri ? (activeLabel || label) : label;
+
+  return (
+    <TouchableOpacity 
+      style={[styles.container, imageUri && styles.active]} 
+      activeOpacity={0.7}
+      onPress={takePhoto}
+    >
+      {imageUri ? (
+        <Image source={{ uri: imageUri }} style={styles.thumb} />
+      ) : (
+        <Ionicons name={icon} size={20} color={Colors.primary} style={styles.icon} />
+      )}
+      
+      <Label 
+        size={11} 
+        secondary 
+        color={imageUri ? Colors.primary : "#555"} 
+        style={styles.label}
+        numberOfLines={1}
+      >
+        {imageUri ? `${displayText} ✓` : displayText}
+      </Label>
+    </TouchableOpacity>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1, 
+    height: 50, 
+    backgroundColor: Colors.inputBackground, 
+    borderRadius: 25, 
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center', 
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderColor: Colors.border, 
+    overflow: 'hidden',
+  },
+  active: {
+    backgroundColor: Colors.activeBackground, 
+    borderColor: Colors.primary,
+  },
+  icon: {
+    marginRight: 6,
+  },
+  label: {
+    textAlign: 'center',
+    flexShrink: 1,
+  },
+  thumb: {
+    width: 24,
+    height: 24,
+    borderRadius: 4,
+    marginRight: 8,
+  },
+});
+
+
+components/InfoModal.jsx:
+
+import { Ionicons } from "@expo/vector-icons";
+import { Modal, Pressable, StyleSheet, TouchableOpacity, View } from "react-native";
+import { Colors } from "../theme/colors";
+import Label from "./Label";
+
+export default function InfoModal({ 
+  visible, 
+  onClose, 
+  title, 
+  children,
+  variant = "center", // "center" | "bottom"
+  showCloseButton = true
+}) {
+  const isBottom = variant === "bottom";
+
+  return (
+    <Modal
+      animationType={isBottom ? "slide" : "fade"}
+      transparent={true}
+      visible={visible}
+      onRequestClose={onClose}
+    >
+      {/* 1. Outer Pressable: The "Backdrop" */}
+      {/* Tapping here fires 'onClose' because it is the bottom-most layer */}
+      <Pressable 
+        style={[
+          styles.overlay, 
+          isBottom ? styles.overlayBottom : styles.overlayCenter
+        ]}
+        onPress={onClose}
+      >
+        {/* 2. Inner Pressable: The "Container" */}
+        {/* Tapping here does NOTHING, but it 'catches' the tap so it doesn't hit the backdrop. */}
+        {/* Your buttons/icons inside this are 'above' this layer, so they will still work! */}
+        <Pressable 
+          style={[
+            styles.container, 
+            isBottom ? styles.containerBottom : styles.containerCenter
+          ]}
+          onPress={() => {}} 
+        >
+          
+          {/* Header */}
+          <View style={styles.header}>
+            <Label variant="subheading" style={styles.title}>{title}</Label>
+            
+            {showCloseButton && (
+              <TouchableOpacity onPress={onClose} style={styles.closeButton}>
+                <Ionicons name="close" size={24} color={Colors.black} />
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {/* Content */}
+          <View style={styles.content}>
+            {children}
+          </View>
+
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+const styles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+  },
+  overlayCenter: {
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  overlayBottom: {
+    justifyContent: "flex-end", 
+  },
+  
+  container: {
+    backgroundColor: Colors.white,
+    overflow: "hidden",
+  },
+  containerCenter: {
+    width: "100%",
+    maxWidth: 340,
+    borderRadius: 16,
+    padding: 20,
+    // Shadow
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  containerBottom: {
+    width: "100%",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+    paddingBottom: 40, 
+    // Shadow
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  title: {
+    flex: 1,
+  },
+  closeButton: {
+    padding: 4,
+    marginLeft: 8,
+  },
+  content: {
+    // Content flows naturally
+  }
+});
+
+
+components/Label.jsx:
+
+import { Text } from "react-native";
+import { Colors } from "../theme/colors";
+import { Fonts } from "../theme/fonts";
+
+const VARIANTS = {
+  heading:    { size: 24, bold: true,  secondary: false }, 
+  subheading: { size: 20, bold: true,  secondary: true },  
+  body:       { size: 16, bold: false, secondary: true },  
+  label:      { size: 14, bold: true,  secondary: true },  
+  caption:    { size: 12, bold: false, secondary: true },  
+  small:      { size: 11, bold: false, secondary: true },  
+};
+
+export default function Label({
+  children,
+  variant,
+  size,
+  bold,
+  secondary,
+  color = Colors.black,
+  style,
+  ...props
+}) {
+  
+  const variantStyles = VARIANTS[variant] || {};
+  const finalSize = size ?? variantStyles.size ?? 14;
+  const isBold = bold ?? variantStyles.bold ?? false;
+  const isSecondary = secondary ?? variantStyles.secondary ?? false;
+
+  const fontFamily = isSecondary
+    ? (isBold ? Fonts.secondaryBold : Fonts.secondary)
+    : (isBold ? Fonts.primaryBold : Fonts.primary);
+    
+  const defaultMarginBottom = variant === 'heading' ? 20 : 0;
+
+  return (
+    <Text
+      style={[
+        {
+          fontFamily,
+          fontSize: finalSize,
+          color,
+          marginBottom: defaultMarginBottom, 
+        },
+        style,
+      ]}
+      {...props}
+    >
+      {children}
+    </Text>
+  );
+}
+
+
+components/LocationSelector.jsx:
+
+// we will add google places later
+
+import { Ionicons } from "@expo/vector-icons";
+import * as Location from "expo-location";
+import { useState } from "react";
+import { ActivityIndicator, StyleSheet, TextInput, TouchableOpacity, View } from "react-native";
+import { Colors } from "../theme/colors";
+import Label from "./Label";
+
+export default function LocationSelector({
+  value,
+  onLocationSelected,
+  placeholder = "Enter or Select Location",
+  testID,
+}) {
+  const [loading, setLoading] = useState(false);
+
+  // Auto-detect location handler
+  const handleCurrentLocationPress = async () => {
+    if (loading) return;
+
+    setLoading(true);
+
+    try {
+      const permission = await Location.requestForegroundPermissionsAsync();
+
+      if (permission.status !== "granted") {
+        setLoading(false);
+        return;
+      }
+
+      const location = await Location.getCurrentPositionAsync({});
+
+      const address = await Location.reverseGeocodeAsync({
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+      });
+
+      if (address && address.length > 0) {
+        // Construct a readable string
+        const formatted = [
+          address[0].name,
+          address[0].street,
+          address[0].city,
+        ]
+          .filter(Boolean) // Remove null/undefined parts
+          .join(", ");
+
+        onLocationSelected?.(formatted);
+      }
+    } catch (error) {
+      console.log("Location error", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <View style={styles.container}>
+      <Label variant="label" style={styles.label}>
+        Pickup location
+      </Label>
+
+      <View style={styles.inputContainer}>
+        {/* ✅ MANUAL INPUT */}
+        <TextInput
+          testID={`${testID}-input`}
+          style={styles.textInput}
+          value={value}
+          onChangeText={onLocationSelected}
+          placeholder={placeholder}
+          placeholderTextColor={Colors.placeholderTextColor || "#999"}
+        />
+
+        {/* ✅ AUTO-DETECT BUTTON */}
+        <TouchableOpacity 
+          testID={`${testID}-gps-button`}
+          onPress={handleCurrentLocationPress} 
+          disabled={loading}
+          style={styles.iconButton}
+        >
+          {loading ? (
+            <ActivityIndicator size="small" color={Colors.primary} />
+          ) : (
+            <Ionicons
+              name="location-outline"
+              size={20}
+              color={Colors.primary} // Highlighted color to show it's clickable
+            />
+          )}
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    marginBottom: 20, 
+  },
+  label: {
+    marginBottom: 8,
+    marginLeft: 10,
+  },
+  inputContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    height: 50,
+    backgroundColor: Colors.inputBackground,
+    borderRadius: 25,
+    paddingHorizontal: 20,
+    borderWidth: 1,
+    borderColor: Colors.border || "transparent", 
+  },
+  textInput: {
+    flex: 1, // Takes up remaining space
+    fontSize: 14,
+    color: Colors.black,
+    height: "100%",
+    fontFamily: "System", // Or your custom font
+  },
+  iconButton: {
+    paddingLeft: 10,
+    height: "100%",
+    justifyContent: "center",
+  }
+});
+
+
+components/PasswordInput.jsx:
+
+import TextField from "./TextField";
+
+export default function PasswordInput({ 
+  value, 
+  onChangeText, 
+  error, 
+  label = "Password",
+  placeholder = "Enter Password",
+  ...props
+}) {
+  return (
+    <TextField
+      label={label}
+      value={value}
+      onChangeText={onChangeText}
+      error={error}
+      placeholder={placeholder}
+      secureTextEntry={true}
+      autoCapitalize="none"
+      {...props}
+    />
+  );
+}
+
+
+components/PriceRangeSlider.jsx:
+
+import { View, StyleSheet } from "react-native";
+import Slider from "@react-native-community/slider";
+import Label from "./Label";
+import { Colors } from "../theme/colors";
+
+export default function PriceRangeSlider({
+  min = 30,
+  max = 500,
+  value = min,
+  step = 1,
+  onValueChange,
+  testID,
+}) {
+  return (
+    <View style={styles.container} testID={testID} onValueChange={onValueChange}>
+      <View style={styles.header}>
+        <Label variant="label">Price range (per week)</Label>
+        <Label color={Colors.primary} style={styles.value}>
+          ${value}
+        </Label>
+      </View>
+
+      <Slider
+        minimumValue={min}
+        maximumValue={max}
+        step={step}
+        value={value}
+        minimumTrackTintColor={Colors.primary}
+        maximumTrackTintColor={Colors.tabInactive}
+        thumbTintColor={Colors.primary}
+        onValueChange={onValueChange}
+      />
+
+      <View style={styles.labels}>
+        <Label testID="min-price">${min}</Label>
+        <Label testID="max-price">${max}</Label>
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    marginVertical: 20,
+    width: "100%",
+  },
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 8,
+    paddingHorizontal: 4,
+  },
+  value: {
+    fontWeight: "600",
+  },
+  labels: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 4,
+    paddingHorizontal: 4,
+  },
+});
+
+
+components/ScreenWrapper.jsx:
+
+// Not ready for production, will be modified later
+
+import { StatusBar } from "expo-status-bar";
+import {
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+  StyleSheet,
+  TouchableWithoutFeedback,
+  View
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Colors } from "../theme/colors";
+
+export default function ScreenWrapper({ 
+  children, 
+  style, 
+  backgroundColor = Colors.white, 
+  statusBar = "dark",  
+  mode = "default",
+  // ✅ Default to all edges keeps existing Auth screens safe
+  edges = ["top", "bottom", "left", "right"] 
+}) {
+  const insets = useSafeAreaInsets();
+
+  const screenPadding = {
+    backgroundColor,
+    paddingTop: edges.includes("top") ? insets.top : 0,
+    paddingBottom: edges.includes("bottom") ? insets.bottom : 0,
+    paddingLeft: edges.includes("left") ? insets.left : 0,
+    paddingRight: edges.includes("right") ? insets.right : 0,
+  };
+
+  const content = (
+    <View style={[styles.container, screenPadding, style]}>
+      <StatusBar style={statusBar} />
+      {mode === "form" ? (
+        <KeyboardAvoidingView 
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={{ flex: 1 }}
+        >
+          {children}
+        </KeyboardAvoidingView>
+      ) : (
+        children
+      )}
+    </View>
+  );
+
+  if (mode === "form") {
+    return (
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+        <View style={{ flex: 1, backgroundColor }}>
+          {content}
+        </View>
+      </TouchableWithoutFeedback>
+    );
+  }
+
+  return content;
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  }
+});
+
+
+components/ScrollHint.jsx:
+
+import { Ionicons } from "@expo/vector-icons";
+import { useEffect, useRef } from "react";
+import { Animated, StyleSheet } from "react-native";
+import { Colors } from "../theme/colors";
+
+export default function ScrollHint({ visible }) {
+  const bounceAnim = useRef(new Animated.Value(0)).current;
+  const fadeAnim = useRef(new Animated.Value(visible ? 1 : 0)).current;
+
+  // 1. Looping Bounce Animation
+  useEffect(() => {
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(bounceAnim, {
+          toValue: 10,
+          duration: 800,
+          useNativeDriver: true,
+        }),
+        Animated.timing(bounceAnim, {
+          toValue: 0,
+          duration: 800,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    animation.start();
+    return () => animation.stop();
+  }, []);
+
+  // 2. Smooth Fade Transition
+  useEffect(() => {
+    Animated.timing(fadeAnim, {
+      toValue: visible ? 1 : 0,
+      duration: 400,
+      useNativeDriver: true,
+    }).start();
+  }, [visible]);
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[
+        styles.container,
+        {
+          opacity: fadeAnim,
+          transform: [{ translateY: bounceAnim }],
+        },
+      ]}
+    >
+      <Ionicons name="chevron-down" size={32} color={Colors.primary} />
+    </Animated.View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    position: "absolute",
+    bottom: 30,
+    alignSelf: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.9)",
+    borderRadius: 30,
+    padding: 4,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+    zIndex: 99,
+  },
+});
+
+
+components\SupplierProfileView.jsx:
+
+// This is not supposed to be a componenent, will be removed later in production
+
+import { Ionicons } from "@expo/vector-icons";
+import { StyleSheet, View } from "react-native";
+import { Colors } from "../theme/colors";
+import Label from "./Label";
+
+export default function SupplierProfileView({ supplier }) {
+  if (!supplier) return null;
+
+  // Use the data from your MOCK_BIKES supplier object
+  return (
+    <View style={styles.container}>
+      {/* Avatar / Icon Header */}
+      <View style={styles.avatarCircle}>
+        <Ionicons name="business" size={40} color={Colors.primary} />
+      </View>
+      
+      <Label variant="subheading" bold style={styles.name}>
+        {supplier.name}
+      </Label>
+      
+      <View style={styles.locationRow}>
+        <Ionicons name="location-sharp" size={14} color={Colors.placeholderTextColor} />
+        <Label variant="caption" style={styles.locationText}>
+          {supplier.location || "Sydney, AU"}
+        </Label>
+      </View>
+
+      {/* Trust Stats Row */}
+      <View style={styles.statsRow}>
+        <View style={styles.statBox}>
+          <Label bold style={styles.statValue}>4.9</Label>
+          <Label variant="caption" style={styles.statLabel}>Rating</Label>
+        </View>
+        <View style={styles.statDivider} />
+        <View style={styles.statBox}>
+          <Label bold style={styles.statValue}>120+</Label>
+          <Label variant="caption" style={styles.statLabel}>Rides</Label>
+        </View>
+        <View style={styles.statDivider} />
+        <View style={styles.statBox}>
+          <Label bold style={styles.statValue}>2yr</Label>
+          <Label variant="caption" style={styles.statLabel}>Partner</Label>
+        </View>
+      </View>
+
+      {/* Bio / Description */}
+      <View style={styles.bioSection}>
+        <Label variant="body" style={styles.bioText}>
+          Professional fleet manager specializing in high-performance urban e-bikes. 
+          All rides are safety-checked and fully charged before pickup.
+        </Label>
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    alignItems: 'center',
+    width: '100%',
+  },
+  avatarCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: Colors.surface,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  name: {
+    color: Colors.black,
+    marginBottom: 4,
+    textAlign: 'center',
+  },
+  locationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  locationText: {
+    color: Colors.placeholderTextColor,
+    marginLeft: 4,
+  },
+  statsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+    paddingVertical: 15,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 20,
+  },
+  statBox: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  statValue: {
+    fontSize: 18,
+    color: Colors.black,
+  },
+  statLabel: {
+    color: Colors.placeholderTextColor,
+    marginTop: 2,
+  },
+  statDivider: {
+    width: 1,
+    height: '100%',
+    backgroundColor: Colors.border,
+  },
+  bioSection: {
+    width: '100%',
+  },
+  bioText: {
+    textAlign: 'center',
+    color: Colors.black,
+    lineHeight: 20,
+    fontSize: 14,
+  },
+});
+
+
+components/TextField.jsx:
+
+import Label from "@/components/Label";
+import { StyleSheet, TextInput, View } from "react-native";
+import { Colors } from "../theme/colors";
+import { Fonts } from "../theme/fonts";
+
+export default function TextField({
+  label,
+  value,
+  onChangeText,
+  placeholder,
+  secureTextEntry = false,
+  error,
+  testID,
+  style,
+  inputStyle,
+  ...props
+}) {
+  return (
+    <View style={[styles.container, style]}>
+      
+      {label && (
+        <Label 
+          secondary 
+          bold 
+          size={14} 
+          color={Colors.primary} 
+          style={styles.label}
+        >
+          {label}
+        </Label>
+      )}
+
+      <TextInput
+        testID={testID}
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        placeholderTextColor= {Colors.placeholderTextColor}
+        secureTextEntry={secureTextEntry}
+        style={[
+          styles.input,
+          error && { borderColor: Colors.red, borderWidth: 1 },
+          inputStyle 
+        ]}
+        {...props}
+      />
+
+      {error && (
+        <Label 
+          secondary 
+          size={12} 
+          style={{ color: Colors.red, marginTop: 4, marginLeft: 10 }}
+        >
+          {error}
+        </Label>
+      )}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    marginBottom: 20,
+    width: "100%",
+  },
+  label: {
+    marginBottom: 8,
+    marginLeft: 10,
+  },
+  input: {
+    height: 50,
+    backgroundColor: Colors.inputBackground,
+    borderRadius: 25, 
+    paddingHorizontal: 20,
+    fontSize: 16,
+    fontFamily: Fonts.secondary, 
+    color: Colors.black,
+    borderWidth: 1,
+    borderColor: Colors.transparent, 
+  },
+});
+
+
+components/VerifiedBadge.jsx:
+
+import { Ionicons } from "@expo/vector-icons";
+import { Alert, Pressable, StyleSheet } from 'react-native';
+import { Colors } from "../theme/colors";
+import Label from "./Label";
+
+export default function VerifiedBadge({ 
+    isVerified = false, 
+    size = "small", 
+    style 
+}) {
+    if (!isVerified) return null;
+
+    const isSmall = size === "small";
+    const iconSize = isSmall ? 18 : 24;
+    
+    // Deep Emerald Green
+    const verifiedGreen = Colors.success; 
+
+    const handlePress = () => {
+        Alert.alert(
+            "Verified Status",
+            "This e-bike is tested and battle-hardened!",
+            [{ text: "Awesome!", style: "default" }]
+        );
+    };
+
+    return (
+        <Pressable 
+            onPress={handlePress}
+            style={({ pressed }) => [
+                styles.container, 
+                { opacity: pressed ? 0.6 : 1 }, // Haptic-like visual feedback
+                style
+            ]}
+        >
+            <Ionicons 
+                name="shield-checkmark-sharp" 
+                size={iconSize} 
+                color={verifiedGreen} 
+            />
+            <Label 
+                variant="caption" 
+                bold 
+                style={[
+                    styles.text, 
+                    { color: verifiedGreen, fontSize: isSmall ? 8 : 10 }
+                ]}
+            >
+                VERIFIED
+            </Label>
+        </Pressable>
+    );
+}
+
+const styles = StyleSheet.create({
+    container: {
+        alignItems: 'center',
+        justifyContent: 'center',
+        minWidth: 50,
+        padding: 4, // Increased hit slop for better touch experience
+    },
+    text: {
+        marginTop: -1, 
+        letterSpacing: 0.5,
+        textAlign: 'center',
+        textTransform: 'uppercase',
+    },
+});
+
+
